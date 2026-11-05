@@ -224,11 +224,13 @@ async function handleJoin() {
 let rq = 0; function schedule() { if (!rq) rq = requestAnimationFrame(() => { rq = 0; render(); }); }
 function go(v) { view = v; $$('section').forEach(s => s.classList.toggle('on', s.id === 'v-' + v)); $$('nav button').forEach(b => b.classList.toggle('on', b.dataset.v === v)); window.scrollTo(0, 0); render(); }
 $$('nav button').forEach(b => b.onclick = () => { if (b.dataset.v === 'trips' && view === 'trips') curTrip = null; go(b.dataset.v); });
-$$('.monthbar button').forEach(b => b.onclick = () => { month = shiftMonth(month, +b.dataset.m); render(); });
+$$('.monthbar button').forEach(b => b.onclick = () => { month = shiftMonth(month, +b.dataset.m * (pmode === 'year' ? 12 : 1)); render(); });
+$$('.pseg button').forEach(b => b.onclick = () => { pmode = b.dataset.p; render(); });
 
 function render() {
   $('#sync').textContent = !configured ? 'On this phone' : authKnown && !fb ? 'Offline · this phone only' : !authKnown ? 'Connecting…' : !user ? 'Not signed in · this phone only' : !navigator.onLine ? 'Offline · will sync' : pending ? 'Saving…' : '✓ Synced';
-  $$('.mlabel').forEach(e => e.textContent = monthLabel(month));
+  $$('.mlabel').forEach(e => e.textContent = pmode === 'year' ? month.slice(0, 4) : monthLabel(month));
+  $$('.pseg button').forEach(b => b.classList.toggle('on', b.dataset.p === pmode));
   ({ add: renderAdd, list: renderList, trips: renderTrips, stats: renderStats, settings: renderSettings })[view]();
 }
 window.addEventListener('online', schedule); window.addEventListener('offline', schedule);
@@ -323,10 +325,10 @@ function renderList() {
   $('#fCat').innerHTML = '<option value="">All categories</option><optgroup label="Spending">' + S.categories.map(c => `<option value="${esc(c.name)}">${c.icon} ${esc(c.name)}</option>`).join('') + '</optgroup><optgroup label="Income">' + S.incCats.map(c => `<option value="${esc(c.name)}">${c.icon} ${esc(c.name)}</option>`).join('') + '</optgroup>'; $('#fCat').value = fc;
   const ft = $('#fType').value;
   const q = $('#fSearch').value.trim().toLowerCase();
-  const rows = S.expenses.filter(e => mk(e.date) === month && (!ft || (ft === 'in') === isInc(e))).filter(e => (!fp || e.person === fp) && (!fc || e.cat === fc) && (!q || (e.note || '').toLowerCase().includes(q) || e.cat.toLowerCase().includes(q)));
+  const rows = S.expenses.filter(e => e.date.startsWith(pKey()) && (!ft || (ft === 'in') === isInc(e))).filter(e => (!fp || e.person === fp) && (!fc || e.cat === fc) && (!q || (e.note || '').toLowerCase().includes(q) || e.cat.toLowerCase().includes(q)));
   const o = sum(rows.filter(e => !isInc(e))), i = sum(rows.filter(isInc));
   $('#listSum').innerHTML = rows.length ? `${rows.length} entr${rows.length > 1 ? 'ies' : 'y'}${o ? ' · spent ' + money(o) : ''}${i ? ` · <span class="inc">received +${money(i)}</span>` : ''}` : '';
-  $('#list').innerHTML = rows.length ? groupedHTML(rows) : '<div class="empty">Nothing here for this month.</div>';
+  $('#list').innerHTML = rows.length ? groupedHTML(rows) : `<div class="empty">Nothing here for this ${perWord(pKey())}.</div>`;
 }
 ['#fPerson', '#fCat', '#fType'].forEach(s => $(s).onchange = renderList); $('#fSearch').oninput = renderList;
 
@@ -421,46 +423,127 @@ function openTripForm(t) {
 // ---------- Stats & budgets ----------
 function barColor(p) { return p >= 1 ? css('--bad') : p >= .8 ? css('--warn') : css('--good'); }
 function canvasCtx(cv) { const dpr = window.devicePixelRatio || 1, w = cv.clientWidth, h = cv.clientHeight; cv.width = w * dpr; cv.height = h * dpr; const x = cv.getContext('2d'); x.setTransform(dpr, 0, 0, dpr, 0, 0); x.clearRect(0, 0, w, h); return { x, w, h }; }
+// ---------- period helpers (month or year view) ----------
+let pmode = 'month';
+const dSel = { out: null, in: null };               // category picked on each donut
+const pKey = () => pmode === 'year' ? month.slice(0, 4) : month;
+const isYearKey = k => k.length === 4;
+const prevKey = k => isYearKey(k) ? String(+k - 1) : shiftMonth(k, -1);
+const spendIn = k => S.expenses.filter(e => e.date.startsWith(k) && !isInc(e));
+const incomeIn = k => S.expenses.filter(e => e.date.startsWith(k) && isInc(e));
+function daysIn(k) {
+  const t = today();
+  if (isYearKey(k)) { if (k === t.slice(0, 4)) return Math.max(1, Math.round((new Date(t + 'T00:00') - new Date(k + '-01-01T00:00')) / 864e5) + 1); return (+k % 4 === 0 && (+k % 100 !== 0 || +k % 400 === 0)) ? 366 : 365; }
+  if (k === mk(t)) return new Date().getDate();
+  const [y, mo] = k.split('-').map(Number); return new Date(y, mo, 0).getDate();
+}
+const perWord = k => isYearKey(k) ? 'year' : 'month';
+
 function renderStats() {
-  const ex = inMonth(month), tot = sum(ex), prev = sum(inMonth(shiftMonth(month, -1)));
-  const incs = incMonth(month), refunds = sum(incs.filter(isRefund)), income = sum(incs.filter(e => !isRefund(e))), net = tot - refunds, saved = income - net;
-  const isCur = month === mk(today()); const [y, mo] = month.split('-').map(Number); const days = isCur ? new Date().getDate() : new Date(y, mo, 0).getDate();
-  const diff = prev ? (tot - prev) / prev : null;
+  const k = pKey(), Y = isYearKey(k), ex = spendIn(k), tot = sum(ex), prev = sum(spendIn(prevKey(k)));
+  const incs = incomeIn(k), refunds = sum(incs.filter(isRefund)), income = sum(incs.filter(e => !isRefund(e))), net = tot - refunds, saved = income - net;
+  const days = daysIn(k), diff = prev ? (tot - prev) / prev : null;
   $('#statTop').innerHTML = `<div class="trio"><div><div class="muted">Income</div><b class="inc">${money(income)}</b></div><div><div class="muted">Spent</div><b>${money(net)}</b></div><div><div class="muted">${saved >= 0 ? 'Saved' : 'Overspent'}</div><b class="${saved >= 0 ? 'down' : 'up'}">${money(Math.abs(saved))}</b></div></div>
     ${income ? `<div class="bar" style="margin-top:10px"><i style="width:${Math.min(100, net / income * 100)}%;background:${barColor(net / income)}"></i></div><div class="muted" style="margin-top:6px">${saved >= 0 ? `You saved ${Math.round(saved / income * 100)}% of your income` : `Spending is ${money(-saved)} more than income`}</div>` : '<div class="muted" style="margin-top:6px">Add income (or upload a statement) to see savings.</div>'}
-    <div class="muted" style="margin-top:4px">${ex.length} expenses · ${money(Math.round(net / days))}/day avg${refunds ? ` · ${money(refunds)} refunds/cashback deducted` : ''}${diff !== null ? ` · <span class="${diff > 0 ? 'up' : 'down'}">${diff > 0 ? '▲' : '▼'} ${Math.abs(Math.round(diff * 100))}%</span> vs last month` : ''}</div>`;
-  donut($('#donut'), $('#legend'), ex, S.categories);
-  donut($('#incDonut'), $('#incLegend'), incs.filter(e => !isRefund(e)), S.incCats);
-  const ms = [...Array(6)].map((_, i) => shiftMonth(month, i - 5)), vals = ms.map(m => sum(inMonth(m)) - sum(incMonth(m).filter(isRefund))), ivals = ms.map(m => sum(incMonth(m).filter(e => !isRefund(e)))), mx = Math.max(...vals, ...ivals, 1), hasInc = ivals.some(v => v);
-  const B = canvasCtx($('#bars'));
-  if (B.w > 20) {
-    const bw = B.w / 6, top = 18, bot = 20, ch = B.h - top - bot;
-    const bar = (x0, w0, v, col) => { const bh = Math.max(0, v) / mx * ch; B.x.fillStyle = col; B.x.beginPath(); B.x.roundRect ? B.x.roundRect(x0, top + ch - bh, w0, bh, [3, 3, 0, 0]) : B.x.rect(x0, top + ch - bh, w0, bh); B.x.fill(); return bh; };
-    vals.forEach((v, i) => {
-      const cx0 = i * bw;
-      if (hasInc) { const w0 = bw * .32; bar(cx0 + bw * .16, w0, ivals[i], css('--good')); const bh = bar(cx0 + bw * .52, w0, v, i === 5 ? css('--accent') : css('--muted')); }
-      else { const bh = bar(cx0 + bw * .2, bw * .6, v, i === 5 ? css('--accent') : css('--line')); if (v > 0) { B.x.fillStyle = css('--text'); B.x.font = '11px system-ui'; B.x.textAlign = 'center'; B.x.fillText(short(v), cx0 + bw / 2, top + ch - bh - 5); } }
-      B.x.fillStyle = css('--muted'); B.x.font = '11px system-ui'; B.x.textAlign = 'center'; B.x.fillText(monthLabel(ms[i], true), cx0 + bw / 2, B.h - 6);
-    });
-  }
-  renderFact($('#factStats'), month);
-  $('#barsKey').innerHTML = hasInc ? '<span><span class="dot" style="background:var(--good)"></span>Income</span><span><span class="dot" style="background:var(--accent)"></span>Spent</span>' : '';
-  renderBudgets(ex);
-  const grp = key => { const t = {}; ex.forEach(e => t[e[key]] = (t[e[key]] || 0) + e.amount); const k = Object.keys(t).sort((a, b) => t[b] - t[a]); return k.length ? k.map(n => `<div style="margin:6px 0"><div class="row"><span>${esc(n)}</span><b style="text-align:right">${money(t[n])}</b></div><div class="bar"><i style="width:${t[n] / tot * 100}%;background:var(--accent)"></i></div></div>`).join('') : '<div class="muted">No data</div>'; };
+    <div class="muted" style="margin-top:4px">${ex.length} expenses · ${money(Math.round(net / days))}/day avg${Y ? ` · ${money(Math.round(net / Math.max(1, days / 30.44)))}/month avg` : ''}${refunds ? ` · ${money(refunds)} refunds/cashback deducted` : ''}${diff !== null ? ` · <span class="${diff > 0 ? 'up' : 'down'}">${diff > 0 ? '▲' : '▼'} ${Math.abs(Math.round(diff * 100))}%</span> vs last ${perWord(k)}` : ''}</div>`;
+  donut($('#donut'), $('#legend'), $('#outDetail'), ex, S.categories, 'out');
+  donut($('#incDonut'), $('#incLegend'), $('#inDetail'), incs.filter(e => !isRefund(e)), S.incCats, 'in');
+  renderBars(k);
+  renderFact($('#factStats'), k);
+  renderBudgets(ex, Y ? 12 : 1);
+  const grp = key => { const t = {}; ex.forEach(e => t[e[key]] = (t[e[key]] || 0) + e.amount); const ks = Object.keys(t).sort((a, b) => t[b] - t[a]); return ks.length ? ks.map(n => `<div style="margin:6px 0"><div class="row"><span>${esc(n)}</span><b style="text-align:right">${money(t[n])}</b></div><div class="bar"><i style="width:${t[n] / tot * 100}%;background:var(--accent)"></i></div></div>`).join('') : '<div class="muted">No data</div>'; };
   $('#byPerson').innerHTML = grp('person'); $('#byMode').innerHTML = grp('mode');
 }
+
+// Bar chart: last 6 months (month view) or Jan–Dec (year view); follows the category picked on a donut.
+function renderBars(k) {
+  const Y = isYearKey(k), ms = Y ? [...Array(12)].map((_, i) => k + '-' + pad(i + 1)) : [...Array(6)].map((_, i) => shiftMonth(k, i - 5));
+  const co = dSel.out, ci = !co && dSel.in;
+  let vals, ivals;
+  if (co) { vals = ms.map(m => sum(spendIn(m).filter(e => e.cat === co))); ivals = ms.map(() => 0); }
+  else if (ci) { vals = ms.map(() => 0); ivals = ms.map(m => sum(incomeIn(m).filter(e => e.cat === ci))); }
+  else { vals = ms.map(m => sum(spendIn(m)) - sum(incomeIn(m).filter(isRefund))); ivals = ms.map(m => sum(incomeIn(m).filter(e => !isRefund(e)))); }
+  const both = !co && !ci && ivals.some(v => v), onlyInc = !!ci, mx = Math.max(...vals, ...ivals, 1);
+  const c = co || ci, ic = c && cat(c);
+  $('#barsTitle').innerHTML = (c ? `${ic.icon} ${esc(c)} · ` : '') + (Y ? `${k}, month by month` : 'Last 6 months');
+  const cv = $('#bars'), B = canvasCtx(cv); cv._ms = ms;
+  if (B.w > 20) {
+    const n = ms.length, bw = B.w / n, top = 18, bot = 20, ch = B.h - top - bot, hi = ms.indexOf(month);
+    const bar = (x0, w0, v, col) => { const bh = Math.max(0, v) / mx * ch; B.x.fillStyle = col; B.x.beginPath(); B.x.roundRect ? B.x.roundRect(x0, top + ch - bh, w0, bh, [3, 3, 0, 0]) : B.x.rect(x0, top + ch - bh, w0, bh); B.x.fill(); return bh; };
+    ms.forEach((m, i) => {
+      const x0 = i * bw, on = i === hi;
+      let bh;
+      if (both) { bar(x0 + bw * .16, bw * .32, ivals[i], css('--good')); bh = bar(x0 + bw * .52, bw * .32, vals[i], on ? css('--accent') : css('--muted')); }
+      else if (onlyInc) bh = bar(x0 + bw * .2, bw * .6, ivals[i], on ? css('--good') : css('--line'));
+      else bh = bar(x0 + bw * .2, bw * .6, vals[i], co ? (on ? ic.color : ic.color + '77') : on ? css('--accent') : css('--line'));
+      const v = onlyInc ? ivals[i] : vals[i];
+      if (!both && v > 0 && n <= 6) { B.x.fillStyle = css('--text'); B.x.font = '11px system-ui'; B.x.textAlign = 'center'; B.x.fillText(short(v), x0 + bw / 2, top + ch - bh - 5); }
+      B.x.fillStyle = on ? css('--text') : css('--muted'); B.x.font = (on ? '600 ' : '') + '11px system-ui'; B.x.textAlign = 'center';
+      B.x.fillText(Y ? monthLabel(m, true).slice(0, 3) : monthLabel(m, true), x0 + bw / 2, B.h - 6);
+    });
+  }
+  $('#barsKey').innerHTML = (both ? '<span><span class="dot" style="background:var(--good)"></span>Income</span><span><span class="dot" style="background:var(--accent)"></span>Spent</span>' : '') + (Y ? '<span style="margin-left:auto">Tap a month to open it</span>' : '');
+}
+$('#bars').addEventListener('click', ev => {
+  if (pmode !== 'year') return; const cv = ev.currentTarget, ms = cv._ms; if (!ms) return;
+  const i = Math.floor((ev.clientX - cv.getBoundingClientRect().left) / (cv.clientWidth / ms.length));
+  if (ms[i]) { month = ms[i]; pmode = 'month'; render(); toast(monthLabel(month)); }
+});
+
+// Interactive donut: tap a slice or legend row to focus that category; tap again (or the centre) to clear.
+function donut(cv, legend, detail, ex, list, key) {
+  const tot = sum(ex);
+  const byCat = list.map(c => ({ c, v: sum(ex.filter(e => e.cat === c.name)) })).concat([...new Set(ex.map(e => e.cat))].filter(n => !list.some(c => c.name === n)).map(n => ({ c: cat(n), v: sum(ex.filter(e => e.cat === n)) }))).filter(o => o.v > 0).sort((a, b) => b.v - a.v);
+  let sel = dSel[key]; if (sel && !byCat.some(o => o.c.name === sel)) sel = dSel[key] = null;
+  const { x, w, h } = canvasCtx(cv); cv.dataset.k = key;
+  if (w > 20) {
+    const cx = w / 2, cy = h / 2, R = Math.min(w, h) / 2 - 4, r = R - 7, ri = r * .62; let a = -Math.PI / 2; const slices = [];
+    if (!tot) { x.beginPath(); x.arc(cx, cy, r, 0, 2 * Math.PI); x.arc(cx, cy, ri, 0, 2 * Math.PI, true); x.fillStyle = css('--line'); x.fill('evenodd'); }
+    byCat.forEach(o => {
+      const d = o.v / tot * 2 * Math.PI, on = sel === o.c.name, ro = on ? R : r;
+      x.globalAlpha = sel && !on ? .22 : 1; x.beginPath(); x.arc(cx, cy, ro, a, a + d); x.arc(cx, cy, ri, a + d, a, true); x.closePath(); x.fillStyle = o.c.color; x.fill();
+      slices.push({ name: o.c.name, a0: a, a1: a + d }); a += d;
+    });
+    x.globalAlpha = 1; x.textAlign = 'center'; x.textBaseline = 'middle';
+    if (sel) { const o = byCat.find(o => o.c.name === sel); x.fillStyle = css('--text'); x.font = '700 18px system-ui'; x.fillText(short(o.v), cx, cy - 8); x.fillStyle = css('--muted'); x.font = '12px system-ui'; x.fillText((o.c.name.length > 14 ? o.c.name.slice(0, 13) + '…' : o.c.name) + ' · ' + Math.round(o.v / tot * 100) + '%', cx, cy + 12); }
+    else { x.fillStyle = css('--text'); x.font = '700 18px system-ui'; x.fillText(short(tot), cx, cy); }
+    cv._g = { cx, cy, r: R, ri, slices };
+  }
+  legend.innerHTML = byCat.map(o => { const cl = 'lg' + (sel === o.c.name ? ' on' : sel ? ' dim' : ''), d = `data-dc="${esc(o.c.name)}" data-dk="${key}"`; return `<span class="${cl}" ${d}><span class="dot" style="background:${o.c.color}"></span>${o.c.icon} ${esc(o.c.name)}</span><span class="${cl} muted" ${d}>${Math.round(o.v / tot * 100)}%</span><b class="${cl}" ${d}>${money(o.v)}</b>`; }).join('') || `<span class="muted">No data for this ${perWord(pKey())}</span>`;
+  legend.classList.toggle('picking', !!byCat.length);
+  if (!sel) { detail.innerHTML = byCat.length ? '<div class="muted" style="margin-top:8px">Tap a slice or category to see just that.</div>' : ''; return; }
+  const rows = ex.filter(e => e.cat === sel).sort((a, b) => b.date.localeCompare(a.date) || b.ts - a.ts), c = cat(sel);
+  const bud = key === 'out' && c.budget ? c.budget * (isYearKey(pKey()) ? 12 : 1) : 0;
+  detail.innerHTML = `<div class="dhead"><b>${c.icon} ${esc(sel)} · ${rows.length} entr${rows.length > 1 ? 'ies' : 'y'}</b><button class="link" data-dclear="${key}">Clear ✕</button></div>
+    ${bud ? `<div class="muted">${money(sum(rows))} of ${money(bud)} budget</div><div class="bar"><i style="width:${Math.min(100, sum(rows) / bud * 100)}%;background:${barColor(sum(rows) / bud)}"></i></div>` : ''}
+    <div>${rows.slice(0, 40).map(e => itemHTML(e, true)).join('')}</div>${rows.length > 40 ? `<div class="muted">…and ${rows.length - 40} more (see Expenses tab)</div>` : ''}`;
+}
+function pickCat(key, name) { dSel[key] = dSel[key] === name ? null : name; if (key === 'out' && dSel.out) dSel.in = null; if (key === 'in' && dSel.in) dSel.out = null; renderStats(); }
+['#donut', '#incDonut'].forEach(id => $(id).addEventListener('click', ev => {
+  const cv = ev.currentTarget, g = cv._g; if (!g) return;
+  const r = cv.getBoundingClientRect(), dx = ev.clientX - r.left - g.cx, dy = ev.clientY - r.top - g.cy, d = Math.hypot(dx, dy);
+  if (d < g.ri) { if (dSel[cv.dataset.k]) { dSel[cv.dataset.k] = null; renderStats(); } return; }
+  if (d > g.r + 6) return;
+  let a = Math.atan2(dy, dx); if (a < -Math.PI / 2) a += 2 * Math.PI;
+  const s = g.slices.find(s => a >= s.a0 && a < s.a1); if (s) pickCat(cv.dataset.k, s.name);
+}));
+document.addEventListener('click', ev => {
+  const l = ev.target.closest('[data-dc]'); if (l) return pickCat(l.dataset.dk, l.dataset.dc);
+  const c = ev.target.closest('[data-dclear]'); if (c) { dSel[c.dataset.dclear] = null; renderStats(); }
+});
+
 // ---------- fun facts ----------
 let factIdx = Math.floor(Math.random() * 50);
 const nice = n => esc(String(n || '').toLowerCase().replace(/\b\w/g, c => c.toUpperCase()));
 function funFacts(m) {
-  const ex = inMonth(m), tot = sum(ex), F = [];
+  const ex = spendIn(m), tot = sum(ex), F = [], Y = isYearKey(m), per = 'this ' + perWord(m);
   if (ex.length < 3) return F;
-  const prev = sum(inMonth(shiftMonth(m, -1)));
-  const [y, mo] = m.split('-').map(Number), days = m === mk(today()) ? new Date().getDate() : new Date(y, mo, 0).getDate(), daily = tot / days;
+  const prev = sum(spendIn(prevKey(m)));
+  const days = daysIn(m), daily = tot / days;
   const food = ex.filter(e => /swiggy|zomato/i.test(e.note));
   if (food.length >= 2) F.push(`🛵 You ordered from Swiggy/Zomato <b>${food.length} times</b> (${money(sum(food))}). Your delivery partner may know your address better than your relatives! Cook just twice a week and save about <b>${money(Math.round(sum(food) * .4))}</b> a month.`);
   const chai = Math.round(tot / 15);
-  F.push(`☕ This month's spending = <b>${chai.toLocaleString('en-IN')} cups</b> of ₹15 chai. That's one chai a day for <b>${(chai / 365).toFixed(1)} years</b>! Skipping one "small treat" a day adds up fast.`);
+  F.push(`☕ ${Y ? 'This year' : 'This month'}'s spending = <b>${chai.toLocaleString('en-IN')} cups</b> of ₹15 chai. That's one chai a day for <b>${(chai / 365).toFixed(1)} years</b>! Skipping one "small treat" a day adds up fast.`);
   const big = ex.reduce((a, b) => b.amount > a.amount ? b : a);
   F.push(`💸 Biggest splurge: <b>${money(big.amount)}</b> on ${nice(big.note || big.cat)}. Hope it sparked joy ✨ Next time, try the 24-hour rule — if you still want it tomorrow, go ahead.`);
   const small = ex.filter(e => e.amount < 200);
@@ -469,19 +552,19 @@ function funFacts(m) {
   const isWk = e => { const d = new Date(e.date + 'T00:00').getDay(); return d === 0 || d === 6; };
   const wk = ex.filter(isWk), wkAvg = sum(wk) / (days * 2 / 7), wdAvg = sum(ex.filter(e => !isWk(e))) / (days * 5 / 7);
   if (wk.length && wdAvg && wkAvg > wdAvg * 1.3) F.push(`🎉 Weekend-you spends <b>${Math.round((wkAvg / wdAvg - 1) * 100)}% more</b> per day than weekday-you. Saturday-you buys, Monday-you pays! Plan one free weekend outing — beach, park or a long walk.`);
-  if (prev && tot > prev * 1.1) F.push(`🚰 Spending is <b>up ${Math.round((tot / prev - 1) * 100)}%</b> from last month. Your money is trickling faster than usual — time to tighten the tap!`);
-  if (prev && tot < prev * .9) F.push(`🏆 Spending is <b>down ${Math.round((1 - tot / prev) * 100)}%</b> from last month — your wallet is doing a happy dance! Move the ${money(prev - tot)} you saved into savings before it escapes.`);
+  if (prev && tot > prev * 1.1) F.push(`🚰 Spending is <b>up ${Math.round((tot / prev - 1) * 100)}%</b> from last ${perWord(m)}. Your money is trickling faster than usual — time to tighten the tap!`);
+  if (prev && tot < prev * .9) F.push(`🏆 Spending is <b>down ${Math.round((1 - tot / prev) * 100)}%</b> from last ${perWord(m)} — your wallet is doing a happy dance! Move the ${money(prev - tot)} you saved into savings before it escapes.`);
   const cnt = {}; ex.forEach(e => { const k = keyOf(e.note); if (k.length > 2) { cnt[k] = cnt[k] || { n: 0, v: 0, name: e.note }; cnt[k].n++; cnt[k].v += e.amount; } });
   const top = Object.values(cnt).sort((a, b) => b.n - a.n)[0];
   if (top && top.n >= 3) F.push(`📍 ${nice(top.name)} is your most visited place: <b>${top.n} times</b>, ${money(top.v)}. At this point, ask them for a loyalty discount 😄`);
   const byC = {}; ex.forEach(e => byC[e.cat] = (byC[e.cat] || 0) + e.amount); const tc = Object.keys(byC).sort((a, b) => byC[b] - byC[a])[0];
-  F.push(`✂️ ${cat(tc).icon} ${esc(tc)} is your biggest category (${money(byC[tc])}). Cutting it by just 10% saves <b>${money(Math.round(byC[tc] * .1 * 12))} a year</b> — a weekend getaway, for free!`);
+  F.push(`✂️ ${cat(tc).icon} ${esc(tc)} is your biggest category (${money(byC[tc])}). Cutting it by just 10% saves <b>${money(Math.round(byC[tc] * .1 * (Y ? 1 : 12)))} a year</b> — a weekend getaway, for free!`);
   const upi = ex.filter(e => e.mode === 'UPI');
   if (upi.length / ex.length > .6) F.push(`📱 <b>${Math.round(upi.length / ex.length * 100)}%</b> of your spends were UPI. Scan, pay, forget — the holy trinity! Check your UPI history weekly so "just ₹50" doesn't quietly become ₹5,000.`);
   const fuel = ex.filter(e => /petrol|fuel|hpcl|bpcl|iocl|indian oil|shell/i.test(e.note));
-  if (fuel.length) F.push(`⛽ Your vehicle ate <b>${money(sum(fuel))}</b> of fuel this month — it's eating better than some of us! Gentle acceleration and correct tyre pressure stretch every litre.`);
-  const incs = incMonth(m), income = sum(incs.filter(e => !isRefund(e))), net = tot - sum(incs.filter(isRefund));
-  if (income > 0) { const sv = income - net; if (sv > 0) F.push(`🏦 You saved <b>${money(sv)}</b> this month. Keep it up and that's <b>${money(sv * 12)}</b> in a year — ${Math.max(1, Math.floor(sv * 12 / 25000))} Goa trip${sv * 12 >= 50000 ? 's' : ''}' worth (but invest most of it 😉).`); else F.push(`🚨 You spent <b>${money(-sv)} more</b> than you earned. Your wallet has filed a complaint! Try the 50-30-20 rule: 50% needs, 30% wants, 20% savings.`); }
+  if (fuel.length) F.push(`⛽ Your vehicle ate <b>${money(sum(fuel))}</b> of fuel ${per} — it's eating better than some of us! Gentle acceleration and correct tyre pressure stretch every litre.`);
+  const incs = incomeIn(m), income = sum(incs.filter(e => !isRefund(e))), net = tot - sum(incs.filter(isRefund));
+  if (income > 0) { const sv = income - net; if (sv > 0) { const yr = Y ? sv : sv * 12; F.push(`🏦 You saved <b>${money(sv)}</b> ${per}.${Y ? '' : ` Keep it up and that's <b>${money(yr)}</b> in a year`} — ${Math.max(1, Math.floor(yr / 25000))} Goa trip${yr >= 50000 ? 's' : ''}' worth (but invest most of it 😉).`); } else F.push(`🚨 You spent <b>${money(-sv)} more</b> than you earned. Your wallet has filed a complaint! Try the 50-30-20 rule: 50% needs, 30% wants, 20% savings.`); }
   return F;
 }
 // Home screen uses the latest month that has spending (e.g. last month's statement).
@@ -491,26 +574,15 @@ function renderFact(el, m) {
   if (!F.length) { el.innerHTML = '<div class="fact-h"><b>😄 Fun fact</b></div><div class="muted">Upload a statement or add a few expenses and I\'ll roast your spending (nicely).</div>'; return; }
   el.innerHTML = `<div class="fact-h"><b>😄 Fun fact</b><button class="link" data-fact="1">Another ↻</button></div><div class="fact">${F[factIdx % F.length]}</div>`;
 }
-document.addEventListener('click', e => { if (e.target.closest('[data-fact]')) { factIdx++; renderFact(e.target.closest('.card'), view === 'stats' ? month : factMonth()); } });
+document.addEventListener('click', e => { if (e.target.closest('[data-fact]')) { factIdx++; renderFact(e.target.closest('.card'), view === 'stats' ? pKey() : factMonth()); } });
 
-function donut(cv, legend, ex, list) {
-  const tot = sum(ex);
-  const byCat = list.map(c => ({ c, v: sum(ex.filter(e => e.cat === c.name)) })).concat([...new Set(ex.map(e => e.cat))].filter(n => !list.some(c => c.name === n)).map(n => ({ c: cat(n), v: sum(ex.filter(e => e.cat === n)) }))).filter(o => o.v > 0).sort((a, b) => b.v - a.v);
-  const { x, w, h } = canvasCtx(cv);
-  if (w > 20) {
-    const cx = w / 2, cy = h / 2, r = Math.min(w, h) / 2 - 4, ri = r * .62; let a = -Math.PI / 2;
-    if (!tot) { x.beginPath(); x.arc(cx, cy, r, 0, 2 * Math.PI); x.arc(cx, cy, ri, 0, 2 * Math.PI, true); x.fillStyle = css('--line'); x.fill('evenodd'); }
-    byCat.forEach(o => { const d = o.v / tot * 2 * Math.PI; x.beginPath(); x.arc(cx, cy, r, a, a + d); x.arc(cx, cy, ri, a + d, a, true); x.closePath(); x.fillStyle = o.c.color; x.fill(); a += d; });
-    x.fillStyle = css('--text'); x.font = '700 18px system-ui'; x.textAlign = 'center'; x.textBaseline = 'middle'; x.fillText(short(tot), cx, cy);
-  }
-  legend.innerHTML = byCat.map(o => `<span><span class="dot" style="background:${o.c.color}"></span>${o.c.icon} ${esc(o.c.name)}</span><span class="muted">${Math.round(o.v / tot * 100)}%</span><b>${money(o.v)}</b>`).join('') || '<span class="muted">No data for this month</span>';
-}
-function renderBudgets(ex) {
+function renderBudgets(ex, mult = 1) {
   if ($('#budgetList').contains(document.activeElement)) return;
   let tb = 0, ts = 0;
+  $('#budgetTitle').textContent = mult > 1 ? 'Budgets this year (monthly × 12)' : 'Monthly budgets';
   $('#budgetList').innerHTML = S.categories.map((c, i) => {
-    const sp = sum(ex.filter(e => e.cat === c.name)); if (c.budget) { tb += c.budget; ts += sp; } const p = c.budget ? sp / c.budget : 0;
-    return `<div style="margin:12px 0"><div class="row" style="align-items:center"><div style="flex:2">${c.icon} <b>${esc(c.name)}</b><div class="muted">${money(sp)}${c.budget ? ` · ${sp <= c.budget ? money(c.budget - sp) + ' left' : money(sp - c.budget) + ' over'}` : ''}</div></div><input type="number" inputmode="numeric" min="0" step="100" value="${c.budget || ''}" placeholder="No limit" data-b="${i}" style="flex:1;margin:0"></div>${c.budget ? `<div class="bar"><i style="width:${Math.min(100, p * 100)}%;background:${barColor(p)}"></i></div>` : ''}</div>`;
+    const sp = sum(ex.filter(e => e.cat === c.name)), cb = c.budget * mult; if (cb) { tb += cb; ts += sp; } const p = cb ? sp / cb : 0;
+    return `<div style="margin:12px 0"><div class="row" style="align-items:center"><div style="flex:2">${c.icon} <b>${esc(c.name)}</b><div class="muted">${money(sp)}${cb ? ` · ${sp <= cb ? money(cb - sp) + ' left' : money(sp - cb) + ' over'}` : ''}</div></div><input type="number" inputmode="numeric" min="0" step="100" value="${c.budget || ''}" placeholder="No limit" data-b="${i}" style="flex:1;margin:0"></div>${cb ? `<div class="bar"><i style="width:${Math.min(100, p * 100)}%;background:${barColor(p)}"></i></div>` : ''}</div>`;
   }).join('');
   const p = tb ? ts / tb : 0;
   $('#budgetTotal').innerHTML = tb ? `<div class="big" style="font-size:22px">${money(ts)} <span class="muted">of ${money(tb)}</span></div><div class="bar"><i style="width:${Math.min(100, p * 100)}%;background:${barColor(p)}"></i></div>` : '';
