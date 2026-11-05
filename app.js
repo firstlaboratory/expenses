@@ -5,12 +5,13 @@ const FB = 'https://www.gstatic.com/firebasejs/10.12.2/';
 const XLSX_URL = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
 const LKEY = 'kharcha_v1';
 const MODES = ['UPI', 'Card', 'Cash', 'Bank'];
-const DEFAULT_CATS = [['Food','🍛','#e8833a'],['Groceries','🛒','#43a047'],['Transport','⛽','#1e88e5'],['Shopping','🛍️','#8e24aa'],['Bills','💡','#fb8c00'],['Rent','🏠','#6d4c41'],['Health','💊','#e53935'],['Entertainment','🎬','#00acc1'],['Travel','✈️','#3949ab'],['Stay','🏨','#5e35b1'],['Education','📚','#546e7a'],['Gifts','🎁','#d81b60'],['Other','📦','#9e9e9e']];
+const DEFAULT_CATS = [['Food','🍛','#e8833a'],['Groceries','🛒','#43a047'],['Transport','⛽','#1e88e5'],['Shopping','🛍️','#8e24aa'],['Bills','💡','#fb8c00'],['Rent','🏠','#6d4c41'],['Health','💊','#e53935'],['Entertainment','🎬','#00acc1'],['Travel','✈️','#3949ab'],['Stay','🏨','#5e35b1'],['Education','📚','#546e7a'],['Gifts','🎁','#d81b60'],['Investments','📈','#00897b'],['Other','📦','#9e9e9e']];
 const KEYWORDS = [['Food',/swiggy|zomato|restaurant|cafe|bakery|food|dominos|kfc|mcdonald|starbucks|biryani|mess\b/],['Groceries',/bigbasket|blinkit|zepto|dmart|grocer|supermarket|instamart|more retail|reliance fresh|jiomart|vegetable/],['Transport',/uber|\bola\b|rapido|petrol|fuel|hpcl|bpcl|iocl|indian oil|shell|fastag|metro|irctc|redbus|parking|toll/],['Shopping',/amazon|flipkart|myntra|ajio|meesho|nykaa|croma|decathlon/],['Bills',/electricity|tneb|tangedco|airtel|\bjio\b|vodafone|bsnl|recharge|broadband|\bgas\b|bill|dth/],['Health',/pharm|apollo|medic|hospital|clinic|\blab\b|diagnos|1mg|netmeds/],['Entertainment',/netflix|hotstar|prime video|spotify|bookmyshow|pvr|inox|youtube/],['Stay',/oyo|hotel|resort|airbnb|homestay|lodge|treebo|fabhotel/],['Travel',/makemytrip|goibibo|indigo|air india|vistara|akasa|booking\.com|cleartrip|ixigo/],['Education',/udemy|coursera|school|college|tuition|books/],['Rent',/\brent\b|nobroker/]];
 const DEFAULT_INC = [['Salary','💼','#2e7d32'],['Interest','🏦','#00897b'],['Refund','↩️','#5c6bc0'],['Cashback','🎉','#f9a825'],['Gift received','🎁','#ec407a'],['Other income','💰','#7cb342']];
 const INC_KEYWORDS = [['Salary',/salary|\bsal\b|payroll|wages/],['Interest',/int\.? ?pd|interest|int\.? ?coll/],['Refund',/refund|reversal|\brev\b|rfnd/],['Cashback',/cashback|cash back|reward/]];
 const OWN_IN_RE = /self transfer|own account|sweep|fd clos|fd prem|redemption|mutual fund|zerodha|groww|upstox|kuvera|indmoney/i;
-const TRANSFER_RE = /credit ?card|cc ?(bill|pay)|cred club|\bcred\b|card ?payment|autopay|\bsip\b|mutual fund|zerodha|groww|upstox|indmoney|kuvera|\bnps\b|\bppf\b|rd inst|self transfer|own account/i;
+const INVEST_RE = /invest|\bsip\b|mutual ?fund|\bmf\b|stocks?\b|equity|zerodha|groww|upstox|kuvera|indmoney|paytm money|\bnps\b|\bppf\b|\bfd\b|\brd\b|fixed deposit|recurring deposit|\bsgb\b/i;
+const TRANSFER_RE = /credit ?card|cc ?(bill|pay)|^cc\s|\bcc\b.*autopay|si-tad|cred club|\bcred\b|card ?payment|self transfer|own account/i;
 
 const $ = s => document.querySelector(s), $$ = s => [...document.querySelectorAll(s)];
 const pad = n => String(n).padStart(2, '0');
@@ -52,6 +53,7 @@ function normalize(b) {
   if (Array.isArray(b.people) && b.people.length) out.people = b.people.map(String);
   if (b.lastPerson) out.lastPerson = String(b.lastPerson);
   if (b.name) out.name = String(b.name);
+  if (!out.categories.some(c => INVEST_RE.test(c.name))) { const i = out.categories.findIndex(c => c.name === 'Other'); out.categories.splice(i < 0 ? out.categories.length : i, 0, { name: 'Investments', icon: '📈', color: '#00897b', budget: 0 }); }
   out.rules = (Array.isArray(b.rules) ? b.rules : []).filter(r => r && r.k).map(r => ({ k: String(r.k), cat: cn(r.cat) }));
   const fixE = e => ({ id: String(e.id || uid()), ts: +e.ts || Date.now(), date: String(e.date), amount: r2(+e.amount), cat: cn(e.cat), mode: MODES.includes(e.mode) ? e.mode : 'UPI', person: String(e.person || 'Me'), note: String(e.note || ''), ...(e.type === 'in' ? { type: 'in' } : {}) });
   const ok = e => e && /^\d{4}-\d{2}-\d{2}$/.test(e.date) && +e.amount > 0;
@@ -326,8 +328,8 @@ function renderList() {
   const ft = $('#fType').value;
   const q = $('#fSearch').value.trim().toLowerCase();
   const rows = S.expenses.filter(e => e.date.startsWith(pKey()) && (!ft || (ft === 'in') === isInc(e))).filter(e => (!fp || e.person === fp) && (!fc || e.cat === fc) && (!q || (e.note || '').toLowerCase().includes(q) || e.cat.toLowerCase().includes(q)));
-  const o = sum(rows.filter(e => !isInc(e))), i = sum(rows.filter(isInc));
-  $('#listSum').innerHTML = rows.length ? `${rows.length} entr${rows.length > 1 ? 'ies' : 'y'}${o ? ' · spent ' + money(o) : ''}${i ? ` · <span class="inc">received +${money(i)}</span>` : ''}` : '';
+  const o = sum(rows.filter(e => !isInc(e) && !isInvest(e))), iv = sum(rows.filter(e => !isInc(e) && isInvest(e))), i = sum(rows.filter(isInc));
+  $('#listSum').innerHTML = rows.length ? `${rows.length} entr${rows.length > 1 ? 'ies' : 'y'}${o ? ' · spent ' + money(o) : ''}${iv ? ' · invested ' + money(iv) : ''}${i ? ` · <span class="inc">received +${money(i)}</span>` : ''}` : '';
   $('#list').innerHTML = rows.length ? groupedHTML(rows) : `<div class="empty">Nothing here for this ${perWord(pKey())}.</div>`;
 }
 ['#fPerson', '#fCat', '#fType'].forEach(s => $(s).onchange = renderList); $('#fSearch').oninput = renderList;
@@ -430,6 +432,7 @@ const pKey = () => pmode === 'year' ? month.slice(0, 4) : month;
 const isYearKey = k => k.length === 4;
 const prevKey = k => isYearKey(k) ? String(+k - 1) : shiftMonth(k, -1);
 const spendIn = k => S.expenses.filter(e => e.date.startsWith(k) && !isInc(e));
+const spendNI = k => spendIn(k).filter(e => !isInvest(e));        // spending without investments
 const incomeIn = k => S.expenses.filter(e => e.date.startsWith(k) && isInc(e));
 function daysIn(k) {
   const t = today();
@@ -440,17 +443,17 @@ function daysIn(k) {
 const perWord = k => isYearKey(k) ? 'year' : 'month';
 
 function renderStats() {
-  const k = pKey(), Y = isYearKey(k), ex = spendIn(k), tot = sum(ex), prev = sum(spendIn(prevKey(k)));
+  const k = pKey(), Y = isYearKey(k), all = spendIn(k), ex = all.filter(e => !isInvest(e)), invested = sum(all.filter(isInvest)), tot = sum(ex), prev = sum(spendNI(prevKey(k)));
   const incs = incomeIn(k), refunds = sum(incs.filter(isRefund)), income = sum(incs.filter(e => !isRefund(e))), net = tot - refunds, saved = income - net;
   const days = daysIn(k), diff = prev ? (tot - prev) / prev : null;
-  $('#statTop').innerHTML = `<div class="trio"><div><div class="muted">Income</div><b class="inc">${money(income)}</b></div><div><div class="muted">Spent</div><b>${money(net)}</b></div><div><div class="muted">${saved >= 0 ? 'Saved' : 'Overspent'}</div><b class="${saved >= 0 ? 'down' : 'up'}">${money(Math.abs(saved))}</b></div></div>
-    ${income ? `<div class="bar" style="margin-top:10px"><i style="width:${Math.min(100, net / income * 100)}%;background:${barColor(net / income)}"></i></div><div class="muted" style="margin-top:6px">${saved >= 0 ? `You saved ${Math.round(saved / income * 100)}% of your income` : `Spending is ${money(-saved)} more than income`}</div>` : '<div class="muted" style="margin-top:6px">Add income (or upload a statement) to see savings.</div>'}
+  $('#statTop').innerHTML = `<div class="quad"><div><div class="muted">Income</div><b class="inc">${money(income)}</b></div><div><div class="muted">Spent</div><b>${money(net)}</b></div><div><div class="muted">📈 Invested</div><b style="color:#00897b">${money(invested)}</b></div><div><div class="muted">${saved >= 0 ? 'Saved' : 'Overspent'}</div><b class="${saved >= 0 ? 'down' : 'up'}">${money(Math.abs(saved))}</b></div></div>
+    ${income ? `<div class="bar split" style="margin-top:10px"><i style="width:${Math.min(100, net / income * 100)}%;background:${barColor(net / income)}"></i><i style="width:${Math.max(0, Math.min(100 - net / income * 100, invested / income * 100))}%;background:#00897b"></i></div><div class="muted" style="margin-top:6px">${saved >= 0 ? `You saved ${Math.round(saved / income * 100)}% of your income${invested ? ` — ${Math.round(invested / income * 100)}% went into investments` : ''}` : `Spending is ${money(-saved)} more than income`}</div>` : `<div class="muted" style="margin-top:6px">Add income (or upload a statement) to see savings.${invested ? ` You invested ${money(invested)} — nice!` : ''}</div>`}
     <div class="muted" style="margin-top:4px">${ex.length} expenses · ${money(Math.round(net / days))}/day avg${Y ? ` · ${money(Math.round(net / Math.max(1, days / 30.44)))}/month avg` : ''}${refunds ? ` · ${money(refunds)} refunds/cashback deducted` : ''}${diff !== null ? ` · <span class="${diff > 0 ? 'up' : 'down'}">${diff > 0 ? '▲' : '▼'} ${Math.abs(Math.round(diff * 100))}%</span> vs last ${perWord(k)}` : ''}</div>`;
   donut($('#donut'), $('#legend'), $('#outDetail'), ex, S.categories, 'out');
   donut($('#incDonut'), $('#incLegend'), $('#inDetail'), incs.filter(e => !isRefund(e)), S.incCats, 'in');
   renderBars(k);
   renderFact($('#factStats'), k);
-  renderBudgets(ex, Y ? 12 : 1);
+  renderBudgets(all, Y ? 12 : 1);
   const grp = key => { const t = {}; ex.forEach(e => t[e[key]] = (t[e[key]] || 0) + e.amount); const ks = Object.keys(t).sort((a, b) => t[b] - t[a]); return ks.length ? ks.map(n => `<div style="margin:6px 0"><div class="row"><span>${esc(n)}</span><b style="text-align:right">${money(t[n])}</b></div><div class="bar"><i style="width:${t[n] / tot * 100}%;background:var(--accent)"></i></div></div>`).join('') : '<div class="muted">No data</div>'; };
   $('#byPerson').innerHTML = grp('person'); $('#byMode').innerHTML = grp('mode');
 }
@@ -460,9 +463,9 @@ function renderBars(k) {
   const Y = isYearKey(k), ms = Y ? [...Array(12)].map((_, i) => k + '-' + pad(i + 1)) : [...Array(6)].map((_, i) => shiftMonth(k, i - 5));
   const co = dSel.out, ci = !co && dSel.in;
   let vals, ivals;
-  if (co) { vals = ms.map(m => sum(spendIn(m).filter(e => e.cat === co))); ivals = ms.map(() => 0); }
+  if (co) { vals = ms.map(m => sum(spendNI(m).filter(e => e.cat === co))); ivals = ms.map(() => 0); }
   else if (ci) { vals = ms.map(() => 0); ivals = ms.map(m => sum(incomeIn(m).filter(e => e.cat === ci))); }
-  else { vals = ms.map(m => sum(spendIn(m)) - sum(incomeIn(m).filter(isRefund))); ivals = ms.map(m => sum(incomeIn(m).filter(e => !isRefund(e)))); }
+  else { vals = ms.map(m => sum(spendNI(m)) - sum(incomeIn(m).filter(isRefund))); ivals = ms.map(m => sum(incomeIn(m).filter(e => !isRefund(e)))); }
   const both = !co && !ci && ivals.some(v => v), onlyInc = !!ci, mx = Math.max(...vals, ...ivals, 1);
   const c = co || ci, ic = c && cat(c);
   $('#barsTitle').innerHTML = (c ? `${ic.icon} ${esc(c)} · ` : '') + (Y ? `${k}, month by month` : 'Last 6 months');
@@ -535,7 +538,6 @@ document.addEventListener('click', ev => {
 // ---------- fun facts ----------
 let factIdx = Math.floor(Math.random() * 50);
 const nice = n => esc(String(n || '').toLowerCase().replace(/\b\w/g, c => c.toUpperCase()));
-const INVEST_RE = /invest|\bsip\b|mutual ?fund|\bmf\b|stocks?\b|equity|zerodha|groww|upstox|kuvera|indmoney|paytm money|\bnps\b|\bppf\b|\bfd\b|\brd\b|fixed deposit|recurring deposit|\bsgb\b/i;
 const isInvest = e => INVEST_RE.test(e.cat) || INVEST_RE.test(e.note);
 function funFacts(m) {
   const all = spendIn(m), inv = all.filter(isInvest), ex = all.filter(e => !isInvest(e)), tot = sum(ex), F = [], Y = isYearKey(m), per = 'this ' + perWord(m);
@@ -656,7 +658,7 @@ $('#wipe').onclick = () => { if (!S.expenses.length) return toast('Nothing to de
 const keyOf = n => String(n || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\b\d+\b/g, ' ').replace(/\s+/g, ' ').trim();
 function ruleFor(text, type) { const t = keyOf(text); if (!t) return null; const L = type === 'in' ? S.incCats : S.categories; const r = [...S.rules].sort((a, b) => b.k.length - a.k.length).find(r => r.k && t.includes(r.k) && L.some(c => c.name === r.cat)); return r ? r.cat : null; }
 function setRule(k, n) { k = keyOf(k); if (k.length < 2) return; const r = S.rules.find(r => r.k === k); if (r) r.cat = n; else S.rules.push({ k, cat: n }); }
-function guessCat(text) { const r = ruleFor(text); if (r) return r; const t = String(text).toLowerCase(); for (const [n, re] of KEYWORDS) if (re.test(t) && S.categories.some(c => c.name === n)) return n; return S.categories.some(c => c.name === 'Other') ? 'Other' : S.categories[0].name; }
+function guessCat(text) { const r = ruleFor(text); if (r) return r; const t = String(text).toLowerCase(); if (INVEST_RE.test(t)) { const c = S.categories.find(c => INVEST_RE.test(c.name)); if (c) return c.name; } for (const [n, re] of KEYWORDS) if (re.test(t) && S.categories.some(c => c.name === n)) return n; return S.categories.some(c => c.name === 'Other') ? 'Other' : S.categories[0].name; }
 function guessInc(text) { const r = ruleFor(text, 'in'); if (r) return r; const t = String(text).toLowerCase(); for (const [n, re] of INC_KEYWORDS) if (re.test(t) && S.incCats.some(c => c.name === n)) return n; return S.incCats.some(c => c.name === 'Other income') ? 'Other income' : S.incCats[0].name; }
 function guessMode(t) { t = String(t).toUpperCase(); if (/^UPI|\bUPI\b/.test(t)) return 'UPI'; if (/^POS|\bPOS\b|CARD|^ME DC|^VPS|^IPS/.test(t)) return 'Card'; if (/^ATW|^NWD|^EAW|ATM|CASH/.test(t)) return 'Cash'; return 'Bank'; }
 function cleanNarration(n) { const p = n.split('-'); if (/^UPI/i.test(n) && p.length > 1 && p[1].trim()) return p[1].trim().slice(0, 60); return n.replace(/^(POS|ME DC|VPS|IPS)\s+[\dX*]+\s+/i, '').replace(/\s+/g, ' ').trim().slice(0, 60); }
