@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>Kharcha</title>
+<title>Trickle</title>
 <meta name="description" content="Offline expense tracker with budgets, charts and CSV import">
 <meta name="theme-color" content="#0f766e">
 <link rel="manifest" href="manifest.json">
@@ -81,7 +81,7 @@ canvas{width:100%;display:block}
 </style>
 </head>
 <body>
-<header><h1>Khar<span>cha</span></h1><span class="muted" id="hdrTotal"></span></header>
+<header><h1>Trick<span>le</span></h1><span class="muted" id="hdrTotal"></span></header>
 <main>
 
 <section id="v-add" class="on">
@@ -147,7 +147,7 @@ canvas{width:100%;display:block}
     <div class="label" style="margin-top:0">Share &amp; back up</div>
     <p class="muted" style="margin-top:0">Each person keeps their own copy on their phone. Send a backup to each other (WhatsApp, email) and import it — entries are merged without duplicates.</p>
     <div class="btns"><button id="expBackup">Send backup</button><button id="expCsv">Export CSV</button></div>
-    <label>Import — backup (.json), Kharcha CSV, or HDFC statement (Delimited / CSV)</label>
+    <label>Import — backup (.json), Trickle CSV, or HDFC statement (Delimited / CSV)</label>
     <label>Bank-imported entries are paid by<select id="impPerson"></select></label>
     <input type="file" id="impFile" accept=".json,.csv,.txt,text/csv,application/json,text/plain">
   </div>
@@ -342,8 +342,8 @@ async function deliver(name,text,type){
   const a=document.createElement('a');a.href=URL.createObjectURL(file);a.download=name;document.body.appendChild(a);a.click();setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove();},1000);
 }
 const csvCell=v=>{v=String(v??'');return/[",\n]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v;};
-$('#expCsv').onclick=()=>{const rows=[['Date','Amount','Category','Mode','PaidBy','Note','Id'],...[...S.expenses].sort((a,b)=>a.date.localeCompare(b.date)).map(e=>[e.date,e.amount,cat(e.cat).name,e.mode,e.person,e.note,e.id])];deliver(`kharcha-${today()}.csv`,'\ufeff'+rows.map(r=>r.map(csvCell).join(',')).join('\r\n'),'text/csv');};
-$('#expBackup').onclick=()=>deliver(`kharcha-backup-${today()}.json`,JSON.stringify({app:'kharcha',...S}),'application/json');
+$('#expCsv').onclick=()=>{const rows=[['Date','Amount','Category','Mode','PaidBy','Note','Id'],...[...S.expenses].sort((a,b)=>a.date.localeCompare(b.date)).map(e=>[e.date,e.amount,cat(e.cat).name,e.mode,e.person,e.note,e.id])];deliver(`trickle-${today()}.csv`,'\ufeff'+rows.map(r=>r.map(csvCell).join(',')).join('\r\n'),'text/csv');};
+$('#expBackup').onclick=()=>deliver(`trickle-backup-${today()}.json`,JSON.stringify({app:'trickle',...S}),'application/json');
 
 // ---------- import ----------
 function parseCSV(t){const out=[];let row=[],f='',q=false;for(let i=0;i<t.length;i++){const ch=t[i];if(q){if(ch==='"'){if(t[i+1]==='"'){f+='"';i++;}else q=false;}else f+=ch;}else if(ch==='"')q=true;else if(ch===','){row.push(f);f='';}else if(ch==='\n'||ch==='\r'){if(ch==='\r'&&t[i+1]==='\n')i++;row.push(f);out.push(row);row=[];f='';}else f+=ch;}if(f||row.length){row.push(f);out.push(row);}return out.map(r=>r.map(c=>c.trim()));}
@@ -361,7 +361,7 @@ $('#impFile').onchange=async e=>{
   let text=await file.text();text=text.replace(/^\ufeff/,'');let list=[],kind='';
   try{
     if(/^\s*\{/.test(text)){
-      const b=JSON.parse(text);if(!Array.isArray(b.expenses))throw new Error('Not a Kharcha backup');kind='backup';
+      const b=JSON.parse(text);if(!Array.isArray(b.expenses))throw new Error('Not a Trickle backup');kind='backup';
       const map={};(b.categories||[]).forEach(c=>{let m=catByName(c.name);if(!m){m={...c,id:c.id&&!S.categories.some(x=>x.id===c.id)?c.id:uid(),budget:0};S.categories.push(m);}map[c.id]=m.id;});
       (b.people||[]).forEach(p=>{if(!S.people.includes(p))S.people.push(p);});(b.rules||[]).forEach(r=>{if(r&&r.k&&!S.rules.some(x=>x.k===r.k))S.rules.push({k:r.k,cat:map[r.cat]||r.cat});});
       list=b.expenses.map(x=>({...x,cat:map[x.cat]||x.cat}));

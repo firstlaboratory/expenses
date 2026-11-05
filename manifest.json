@@ -1,6 +1,6 @@
 {
-  "name": "Kharcha — Expense Tracker",
-  "short_name": "Kharcha",
+  "name": "Trickle — Expense Tracker",
+  "short_name": "Trickle",
   "description": "Offline expense tracker with budgets, charts and bank statement import",
   "start_url": "./",
   "scope": "./",
