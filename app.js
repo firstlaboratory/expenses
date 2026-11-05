@@ -866,7 +866,7 @@ function showPreview(res, target) {
   const rows = res.list.sort((a, b) => b.date.localeCompare(a.date)).map(e => {
     const dest = destOf(e, target), ex = seen(dest), dup = ex.ids.has(e.id) || ex.sigs.has(sig(e));
     const xfer = res.kind === 'bank' && (isInc(e) ? OWN_IN_RE : TRANSFER_RE).test(e.raw || e.note), out = t && t.start && (e.date < t.start || e.date > (t.end || t.start));
-    return { e, dest, dup, on: !dup && !xfer && !out, why: dup ? 'Already added' : xfer ? (isInc(e) ? 'Looks like money from your own account' : 'Looks like a transfer or investment') : out ? 'Outside trip dates' : '' };
+    return { e, dest, dup, on: !dup && !xfer && !out, why: dup ? 'Already added' : xfer ? (isInc(e) ? 'Looks like money from your own account' : 'Looks like a card bill or transfer') : out ? 'Outside trip dates' : '' };
   });
   const people = peopleFor(target);
   PV = { kind: res.kind, target, rows, person: target ? (people.includes(meIn(t)) ? meIn(t) : people[0]) : (people.includes(S.lastPerson) ? S.lastPerson : people[0]) };
@@ -874,15 +874,18 @@ function showPreview(res, target) {
   openSheet(`<h3>${nOut ? nOut + ' spend' + (nOut > 1 ? 's' : '') : ''}${nOut && nIn ? ' and ' : ''}${nIn ? nIn + ' income' : ''} found</h3>
     <div class="muted">Adding to <b>${t ? '✈ ' + esc(t.name) : res.kind === 'csv' && rows.some(r => r.dest) ? 'personal expenses and trips in the file' : 'personal expenses'}</b>. Untick anything that isn't a real expense.</div>
     ${res.kind === 'bank' ? `<label>${nIn ? 'Paid / received by' : 'Paid by'}<select id="pvPerson">${opts(people, PV.person)}</select></label>` : ''}
+    <div class="seg pvf" style="margin:12px 0 0"><button type="button" data-f="all" class="on">All <span></span></button><button type="button" data-f="on">To import <span></span></button><button type="button" data-f="off">Skipped <span></span></button></div>
     <div class="pv">${rows.map((x, i) => { const c = cat(x.e.cat); return `<label class="pvrow ${x.on ? '' : 'off'}"><input type="checkbox" data-i="${i}" ${x.on ? 'checked' : ''} ${x.dup ? 'disabled' : ''}><span class="ic" style="background:${c.color}22;width:30px;height:30px;font-size:15px">${c.icon}</span><span class="mid"><span class="t">${esc(x.e.note || c.name)}</span><span class="s">${niceDate(x.e.date)} · ${esc(c.name)}${x.e.tripName && !target ? ' · ✈ ' + esc(x.e.tripName) : ''}${x.why ? ` · <span class="why">${x.why}</span>` : ''}</span></span><span class="a${isInc(x.e) ? ' inc' : ''}">${isInc(x.e) ? '+' : ''}${money(x.e.amount)}</span></label>`; }).join('')}</div>
     <button class="primary" id="pvGo"></button><button style="width:100%;margin-top:8px" id="pvCancel">Cancel</button>`, ev => {
+    const f = ev.target.closest('[data-f]');
+    if (f) { $$('#sheet [data-f]').forEach(b => b.classList.toggle('on', b === f)); $$('#sheet .pvrow').forEach((r, i) => r.classList.toggle('hidden', f.dataset.f !== 'all' && (f.dataset.f === 'on') !== PV.rows[i].on)); return; }
     if (ev.target.id === 'pvCancel') { PV = null; return closeSheet(); }
     if (ev.target.id === 'pvGo') return doImport();
   });
   $('#sheet').onchange = ev => { if (ev.target.id === 'pvPerson') PV.person = ev.target.value; const i = ev.target.dataset.i; if (i !== undefined) { PV.rows[+i].on = ev.target.checked; ev.target.closest('.pvrow').classList.toggle('off', !ev.target.checked); pvButton(); } };
   pvButton();
 }
-function pvButton() { const sel = PV.rows.filter(x => x.on), o = sum(sel.filter(x => !isInc(x.e)).map(x => x.e)), i = sum(sel.filter(x => isInc(x.e)).map(x => x.e)); const b = $('#pvGo'); b.disabled = !sel.length; b.textContent = sel.length ? `Import ${sel.length}${o ? ' · −' + money(o) : ''}${i ? ' · +' + money(i) : ''}` : 'Nothing selected'; }
+function pvButton() { const cnt = { all: PV.rows.length, on: PV.rows.filter(x => x.on).length }; cnt.off = cnt.all - cnt.on; $$('#sheet [data-f]').forEach(b => b.querySelector('span').textContent = cnt[b.dataset.f]); const sel = PV.rows.filter(x => x.on), o = sum(sel.filter(x => !isInc(x.e)).map(x => x.e)), i = sum(sel.filter(x => isInc(x.e)).map(x => x.e)); const b = $('#pvGo'); b.disabled = !sel.length; b.textContent = sel.length ? `Import ${sel.length}${o ? ' · −' + money(o) : ''}${i ? ' · +' + money(i) : ''}` : 'Nothing selected'; }
 function doImport() {
   const sel = PV.rows.filter(x => x.on); if (!sel.length) return;
   let metaChanged = false; const newTrips = {}, out = [];
