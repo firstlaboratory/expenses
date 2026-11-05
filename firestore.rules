@@ -1,0 +1,36 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+
+    // Personal data: only the owner can read or write.
+    match /users/{uid} {
+      allow read, write: if signedIn() && request.auth.uid == uid;
+      match /expenses/{id} {
+        allow read, write: if signedIn() && request.auth.uid == uid;
+      }
+    }
+
+    // Shared trips: members can read and edit; anyone signed in who has the
+    // invite link (the trip id) can add themselves as a member.
+    match /trips/{tripId} {
+      allow get: if signedIn();
+      allow list: if signedIn() && request.auth.uid in resource.data.memberUids;
+      allow create: if signedIn()
+        && request.resource.data.owner == request.auth.uid
+        && request.resource.data.memberUids == [request.auth.uid];
+      allow update: if signedIn() && (
+        request.auth.uid in resource.data.memberUids
+        || (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['memberUids', 'members', 'names'])
+            && request.resource.data.memberUids.hasAll(resource.data.memberUids)
+            && request.resource.data.memberUids.size() == resource.data.memberUids.size() + 1
+            && request.auth.uid in request.resource.data.memberUids));
+      allow delete: if signedIn() && resource.data.owner == request.auth.uid;
+
+      match /expenses/{id} {
+        allow read, write: if signedIn()
+          && request.auth.uid in get(/databases/$(database)/documents/trips/$(tripId)).data.memberUids;
+      }
+    }
+  }
+}
