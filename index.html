@@ -78,7 +78,7 @@ canvas{width:100%;display:block}
 .catrow input[type=color]{width:40px;height:40px;padding:2px;flex:none}
 .pill{display:inline-flex;align-items:center;gap:6px;background:var(--accent-soft);color:var(--accent);border-radius:999px;padding:5px 6px 5px 12px;margin:0 6px 6px 0;font-size:14px}
 .pill button{border:0;background:none;color:inherit;padding:0 6px;font-size:16px}
-.filters{display:flex;gap:6px;margin-bottom:6px}.filters select{margin:0;padding:8px;font-size:14px}
+.filters{display:flex;gap:6px;margin-bottom:6px}.filters select{margin:0;padding:8px;font-size:14px;min-width:0;flex:1}
 .sheet-bg{position:fixed;inset:0;background:#0007;z-index:30;display:none;align-items:flex-end;justify-content:center}
 .sheet-bg.on{display:flex}
 .sheet{background:var(--card);width:100%;max-width:560px;border-radius:18px 18px 0 0;padding:16px 16px calc(20px + env(safe-area-inset-bottom));max-height:88vh;overflow:auto}
@@ -95,6 +95,12 @@ canvas{width:100%;display:block}
 .trip .row{align-items:center}
 .settle{display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--line);font-size:14px}
 .settle:last-child{border-bottom:0}
+.inc{color:var(--good)}
+.seg{display:flex;background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:3px;margin-bottom:12px}
+.seg button{flex:1;border:0;background:none;padding:8px;font-weight:600;color:var(--muted)}
+.seg button.on{background:var(--card);color:var(--text);box-shadow:0 1px 3px #0002}
+.trio{display:flex;gap:8px}.trio>div{flex:1;min-width:0}.trio b{font-size:19px;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.keyrow{display:flex;gap:14px;font-size:12px;color:var(--muted);margin-top:6px}
 .banner{background:var(--accent-soft);color:var(--text);border-radius:12px;padding:12px 14px;margin-bottom:12px;font-size:14px}
 .gbtn{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;margin-top:10px;font-weight:600}
 </style>
@@ -105,19 +111,20 @@ canvas{width:100%;display:block}
 
 <section id="v-add" class="on">
   <div class="card hero">
-    <div class="hero-top"><div class="hero-ic">📄</div><div><h2>Upload bank statement</h2><p class="muted">CSV, Delimited or Excel from HDFC and most banks. Spends are added and sorted into categories for you. Trickle CSV files and backups work too.</p></div></div>
+    <div class="hero-top"><div class="hero-ic">📄</div><div><h2>Upload bank statement</h2><p class="muted">CSV, Delimited or Excel from HDFC and most banks. Spends and income are added and sorted into categories for you. Trickle CSV files and backups work too.</p></div></div>
     <label>Add to<select id="impTarget"></select></label>
     <button class="primary" id="uploadBtn">Choose statement file</button>
   </div>
   <div class="btns"><button id="manualBtn">✎ Add manually</button><button id="dlCsv">⬇ Download CSV</button></div>
   <form id="f" class="card hidden" autocomplete="off">
-    <div class="amt"><span>₹</span><input id="amt" type="number" inputmode="decimal" step="0.01" min="0.01" placeholder="0" required></div>
-    <label>For<select id="fFor"></select></label>
+    <div class="seg" id="typeSeg"><button type="button" data-t="out" class="on">Expense</button><button type="button" data-t="in">Income</button></div>
+    <div class="amt"><span id="amtSign">₹</span><input id="amt" type="number" inputmode="decimal" step="0.01" min="0.01" placeholder="0" required></div>
+    <label id="forWrap">For<select id="fFor"></select></label>
     <div class="label">Category</div><div id="catChips" class="chips"></div>
     <div class="label">Paid via</div><div id="modeChips" class="chips"></div>
     <div class="row">
       <label>Date<input type="date" id="date" required></label>
-      <label>Paid by<select id="person"></select></label>
+      <label><span id="personLbl">Paid by</span><select id="person"></select></label>
     </div>
     <label>Note<input id="note" placeholder="What was it for?" maxlength="120"></label>
     <button class="primary" id="saveBtn">Save expense</button>
@@ -129,11 +136,11 @@ canvas{width:100%;display:block}
 
 <section id="v-list">
   <div class="monthbar"><button data-m="-1">‹</button><strong class="mlabel"></strong><button data-m="1">›</button></div>
-  <div class="filters"><select id="fPerson"></select><select id="fCat"></select></div>
+  <div class="filters"><select id="fType"><option value="">All</option><option value="out">Spending</option><option value="in">Income</option></select><select id="fPerson"></select><select id="fCat"></select></div>
   <input id="fSearch" placeholder="Search notes…" style="margin:0 0 6px">
   <div id="listSum" class="muted"></div>
   <div id="list"></div>
-  <p class="muted" style="text-align:center">Your personal expenses. Trip expenses live in Trips.</p>
+  <p class="muted" style="text-align:center">Your personal spending and income. Trip expenses live in Trips.</p>
 </section>
 
 <section id="v-trips"><div id="tripsBox"></div></section>
@@ -142,7 +149,7 @@ canvas{width:100%;display:block}
   <div class="monthbar"><button data-m="-1">‹</button><strong class="mlabel"></strong><button data-m="1">›</button></div>
   <div class="card" id="statTop"></div>
   <div class="card"><div class="label" style="margin-top:0">By category</div><canvas id="donut" style="height:200px"></canvas><div class="legend" id="legend"></div></div>
-  <div class="card"><div class="label" style="margin-top:0">Last 6 months</div><canvas id="bars" style="height:180px"></canvas></div>
+  <div class="card"><div class="label" style="margin-top:0">Last 6 months</div><canvas id="bars" style="height:180px"></canvas><div class="keyrow" id="barsKey"></div></div>
   <div class="card"><div class="label" style="margin-top:0">Monthly budgets</div><div id="budgetTotal"></div><div id="budgetList"></div><p class="muted" style="margin-bottom:0">Set a limit per category (0 = none). You're warned at 80%.</p></div>
   <div class="card"><div class="label" style="margin-top:0">By person</div><div id="byPerson"></div><div class="label">By payment mode</div><div id="byMode"></div></div>
 </section>
@@ -155,9 +162,15 @@ canvas{width:100%;display:block}
     <div class="row" style="margin-top:6px"><input id="newPerson" placeholder="Add a person" style="margin:0"><button class="small" id="addPerson" style="flex:0 0 auto">Add</button></div>
   </div>
   <div class="card">
-    <div class="label" style="margin-top:0">Categories</div>
+    <div class="label" style="margin-top:0">Spending categories</div>
     <div id="catEdit"></div>
     <button class="small" id="addCat">+ Add category</button>
+  </div>
+  <div class="card">
+    <div class="label" style="margin-top:0">Income categories</div>
+    <div id="incEdit"></div>
+    <button class="small" id="addInc">+ Add income category</button>
+    <p class="muted" style="margin-bottom:0">Refund and Cashback reduce your spending instead of counting as income.</p>
   </div>
   <div class="card">
     <div class="label" style="margin-top:0">Auto-category rules</div>
