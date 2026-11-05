@@ -428,15 +428,8 @@ function renderStats() {
   $('#statTop').innerHTML = `<div class="trio"><div><div class="muted">Income</div><b class="inc">${money(income)}</b></div><div><div class="muted">Spent</div><b>${money(net)}</b></div><div><div class="muted">${saved >= 0 ? 'Saved' : 'Overspent'}</div><b class="${saved >= 0 ? 'down' : 'up'}">${money(Math.abs(saved))}</b></div></div>
     ${income ? `<div class="bar" style="margin-top:10px"><i style="width:${Math.min(100, net / income * 100)}%;background:${barColor(net / income)}"></i></div><div class="muted" style="margin-top:6px">${saved >= 0 ? `You saved ${Math.round(saved / income * 100)}% of your income` : `Spending is ${money(-saved)} more than income`}</div>` : '<div class="muted" style="margin-top:6px">Add income (or upload a statement) to see savings.</div>'}
     <div class="muted" style="margin-top:4px">${ex.length} expenses · ${money(Math.round(net / days))}/day avg${refunds ? ` · ${money(refunds)} refunds/cashback deducted` : ''}${diff !== null ? ` · <span class="${diff > 0 ? 'up' : 'down'}">${diff > 0 ? '▲' : '▼'} ${Math.abs(Math.round(diff * 100))}%</span> vs last month` : ''}</div>`;
-  const byCat = S.categories.map(c => ({ c, v: sum(ex.filter(e => e.cat === c.name)) })).concat([...new Set(ex.map(e => e.cat))].filter(n => !S.categories.some(c => c.name === n)).map(n => ({ c: cat(n), v: sum(ex.filter(e => e.cat === n)) }))).filter(o => o.v > 0).sort((a, b) => b.v - a.v);
-  const { x, w, h } = canvasCtx($('#donut'));
-  if (w > 20) {
-    const cx = w / 2, cy = h / 2, r = Math.min(w, h) / 2 - 4, ri = r * .62; let a = -Math.PI / 2;
-    if (!tot) { x.beginPath(); x.arc(cx, cy, r, 0, 2 * Math.PI); x.arc(cx, cy, ri, 0, 2 * Math.PI, true); x.fillStyle = css('--line'); x.fill('evenodd'); }
-    byCat.forEach(o => { const d = o.v / tot * 2 * Math.PI; x.beginPath(); x.arc(cx, cy, r, a, a + d); x.arc(cx, cy, ri, a + d, a, true); x.closePath(); x.fillStyle = o.c.color; x.fill(); a += d; });
-    x.fillStyle = css('--text'); x.font = '700 18px system-ui'; x.textAlign = 'center'; x.textBaseline = 'middle'; x.fillText(short(tot), cx, cy);
-  }
-  $('#legend').innerHTML = byCat.map(o => `<span><span class="dot" style="background:${o.c.color}"></span>${o.c.icon} ${esc(o.c.name)}</span><span class="muted">${Math.round(o.v / tot * 100)}%</span><b>${money(o.v)}</b>`).join('') || '<span class="muted">No data</span>';
+  donut($('#donut'), $('#legend'), ex, S.categories);
+  donut($('#incDonut'), $('#incLegend'), incs.filter(e => !isRefund(e)), S.incCats);
   const ms = [...Array(6)].map((_, i) => shiftMonth(month, i - 5)), vals = ms.map(m => sum(inMonth(m)) - sum(incMonth(m).filter(isRefund))), ivals = ms.map(m => sum(incMonth(m).filter(e => !isRefund(e)))), mx = Math.max(...vals, ...ivals, 1), hasInc = ivals.some(v => v);
   const B = canvasCtx($('#bars'));
   if (B.w > 20) {
@@ -453,6 +446,18 @@ function renderStats() {
   renderBudgets(ex);
   const grp = key => { const t = {}; ex.forEach(e => t[e[key]] = (t[e[key]] || 0) + e.amount); const k = Object.keys(t).sort((a, b) => t[b] - t[a]); return k.length ? k.map(n => `<div style="margin:6px 0"><div class="row"><span>${esc(n)}</span><b style="text-align:right">${money(t[n])}</b></div><div class="bar"><i style="width:${t[n] / tot * 100}%;background:var(--accent)"></i></div></div>`).join('') : '<div class="muted">No data</div>'; };
   $('#byPerson').innerHTML = grp('person'); $('#byMode').innerHTML = grp('mode');
+}
+function donut(cv, legend, ex, list) {
+  const tot = sum(ex);
+  const byCat = list.map(c => ({ c, v: sum(ex.filter(e => e.cat === c.name)) })).concat([...new Set(ex.map(e => e.cat))].filter(n => !list.some(c => c.name === n)).map(n => ({ c: cat(n), v: sum(ex.filter(e => e.cat === n)) }))).filter(o => o.v > 0).sort((a, b) => b.v - a.v);
+  const { x, w, h } = canvasCtx(cv);
+  if (w > 20) {
+    const cx = w / 2, cy = h / 2, r = Math.min(w, h) / 2 - 4, ri = r * .62; let a = -Math.PI / 2;
+    if (!tot) { x.beginPath(); x.arc(cx, cy, r, 0, 2 * Math.PI); x.arc(cx, cy, ri, 0, 2 * Math.PI, true); x.fillStyle = css('--line'); x.fill('evenodd'); }
+    byCat.forEach(o => { const d = o.v / tot * 2 * Math.PI; x.beginPath(); x.arc(cx, cy, r, a, a + d); x.arc(cx, cy, ri, a + d, a, true); x.closePath(); x.fillStyle = o.c.color; x.fill(); a += d; });
+    x.fillStyle = css('--text'); x.font = '700 18px system-ui'; x.textAlign = 'center'; x.textBaseline = 'middle'; x.fillText(short(tot), cx, cy);
+  }
+  legend.innerHTML = byCat.map(o => `<span><span class="dot" style="background:${o.c.color}"></span>${o.c.icon} ${esc(o.c.name)}</span><span class="muted">${Math.round(o.v / tot * 100)}%</span><b>${money(o.v)}</b>`).join('') || '<span class="muted">No data for this month</span>';
 }
 function renderBudgets(ex) {
   if ($('#budgetList').contains(document.activeElement)) return;
