@@ -101,6 +101,9 @@ canvas{width:100%;display:block}
 .seg button.on{background:var(--card);color:var(--text);box-shadow:0 1px 3px #0002}
 .trio{display:flex;gap:8px}.trio>div{flex:1;min-width:0}.trio b{font-size:19px;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .keyrow{display:flex;gap:14px;font-size:12px;color:var(--muted);margin-top:6px}
+.fact-card{background:linear-gradient(135deg,var(--accent-soft),var(--card));}
+.fact-h{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
+.fact{font-size:15px;line-height:1.5}
 .banner{background:var(--accent-soft);color:var(--text);border-radius:12px;padding:12px 14px;margin-bottom:12px;font-size:14px}
 .gbtn{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;margin-top:10px;font-weight:600}
 </style>
@@ -130,6 +133,7 @@ canvas{width:100%;display:block}
     <button class="primary" id="saveBtn">Save expense</button>
     <div class="btns hidden" id="editBtns" style="margin-top:8px"><button type="button" id="cancelEdit">Cancel</button><button type="button" class="danger" id="delBtn">Delete</button></div>
   </form>
+  <div class="card fact-card" id="factAdd"></div>
   <div class="label">Recent</div>
   <div class="card" id="recent"></div>
 </section>
@@ -148,6 +152,7 @@ canvas{width:100%;display:block}
 <section id="v-stats">
   <div class="monthbar"><button data-m="-1">‹</button><strong class="mlabel"></strong><button data-m="1">›</button></div>
   <div class="card" id="statTop"></div>
+  <div class="card fact-card" id="factStats"></div>
   <div class="card"><div class="label" style="margin-top:0">Spending by category</div><canvas id="donut" style="height:200px"></canvas><div class="legend" id="legend"></div></div>
   <div class="card"><div class="label" style="margin-top:0">Income by source</div><canvas id="incDonut" style="height:200px"></canvas><div class="legend" id="incLegend"></div></div>
   <div class="card"><div class="label" style="margin-top:0">Last 6 months</div><canvas id="bars" style="height:180px"></canvas><div class="keyrow" id="barsKey"></div></div>
