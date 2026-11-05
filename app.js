@@ -10,8 +10,8 @@ const KEYWORDS = [['Food',/swiggy|zomato|restaurant|cafe|bakery|food|dominos|kfc
 const DEFAULT_INC = [['Salary','💼','#2e7d32'],['Interest','🏦','#00897b'],['Refund','↩️','#5c6bc0'],['Cashback','🎉','#f9a825'],['Gift received','🎁','#ec407a'],['Other income','💰','#7cb342']];
 const INC_KEYWORDS = [['Salary',/salary|\bsal\b|payroll|wages/],['Interest',/int\.? ?pd|interest|int\.? ?coll/],['Refund',/refund|reversal|\brev\b|rfnd/],['Cashback',/cashback|cash back|reward/]];
 const OWN_IN_RE = /self transfer|own account|sweep|fd clos|fd prem|redemption|mutual fund|zerodha|groww|upstox|kuvera|indmoney/i;
-const INVEST_RE = /invest|\bsip\b|mutual ?fund|\bmf\b|stocks?\b|equity|zerodha|groww|upstox|kuvera|indmoney|paytm money|\bnps\b|\bppf\b|\bfd\b|\brd\b|fixed deposit|recurring deposit|\bsgb\b/i;
-const INSTR = [['Mutual funds / SIP','🪙','#00897b',/\bsip\b|mutual ?fund|\bmf\b|kuvera|paytm money|coin by/i],['Stocks','📊','#3949ab',/zerodha|groww|upstox|indmoney|angel|stocks?\b|equity|shares?\b/i],['FD / RD','🏦','#8d6e63',/\bfd\b|\brd\b|fixed deposit|recurring deposit/i],['PPF / NPS','🛡️','#8e24aa',/\bppf\b|\bnps\b/i],['Gold bonds','🥇','#f9a825',/\bsgb\b|gold bond/i]].map(([name, icon, color, re]) => ({ name, icon, color, re }));
+const INVEST_RE = /us market|us stocks?|vested|nasdaq|invest|\bsip\b|mutual ?fund|\bmf\b|stocks?\b|equity|zerodha|groww|upstox|kuvera|indmoney|paytm money|\bnps\b|\bppf\b|\bfd\b|\brd\b|fixed deposit|recurring deposit|\bsgb\b/i;
+const INSTR = [['Mutual funds / SIP','🪙','#00897b',/\bsip\b|mutual ?fund|\bmf\b|kuvera|paytm money|coin by/i],['Stocks','📊','#3949ab',/us market|us stocks?|vested|nasdaq|zerodha|groww|upstox|indmoney|angel|stocks?\b|equity|shares?\b/i],['FD / RD','🏦','#8d6e63',/\bfd\b|\brd\b|fixed deposit|recurring deposit/i],['PPF / NPS','🛡️','#8e24aa',/\bppf\b|\bnps\b/i],['Gold bonds','🥇','#f9a825',/\bsgb\b|gold bond/i]].map(([name, icon, color, re]) => ({ name, icon, color, re }));
 const INSTR_OTHER = { name: 'Other investments', icon: '📈', color: '#26a69a' };
 const instrOf = e => (INSTR.find(i => i.re.test(e.note) || i.re.test(e.cat)) || INSTR_OTHER).name;
 const TRANSFER_RE = /credit ?card|cc ?(bill|pay)|^cc\s|\bcc\b.*autopay|si-tad|cred club|\bcred\b|card ?payment|self transfer|own account/i;
@@ -227,7 +227,7 @@ async function handleJoin() {
 
 // ================= rendering =================
 let rq = 0; function schedule() { if (!rq) rq = requestAnimationFrame(() => { rq = 0; render(); }); }
-function go(v) { view = v; $$('section').forEach(s => s.classList.toggle('on', s.id === 'v-' + v)); $$('nav button').forEach(b => b.classList.toggle('on', b.dataset.v === v)); window.scrollTo(0, 0); render(); }
+function go(v) { if (v !== 'list' && multi) { multi = false; picked.clear(); $('#selBtn').textContent = 'Select'; } view = v; $$('section').forEach(s => s.classList.toggle('on', s.id === 'v-' + v)); $$('nav button').forEach(b => b.classList.toggle('on', b.dataset.v === v)); window.scrollTo(0, 0); render(); }
 $$('nav button').forEach(b => b.onclick = () => { if (b.dataset.v === 'trips' && view === 'trips') curTrip = null; go(b.dataset.v); });
 $$('.monthbar button').forEach(b => b.onclick = () => { month = shiftMonth(month, +b.dataset.m * (pmode === 'year' ? 12 : 1)); render(); });
 $$('.pseg button').forEach(b => b.onclick = () => { pmode = b.dataset.p; render(); });
@@ -236,6 +236,7 @@ function render() {
   $('#sync').textContent = !configured ? 'On this phone' : authKnown && !fb ? 'Offline · this phone only' : !authKnown ? 'Connecting…' : !user ? 'Not signed in · this phone only' : !navigator.onLine ? 'Offline · will sync' : pending ? 'Saving…' : '✓ Synced';
   $$('.mlabel').forEach(e => e.textContent = pmode === 'year' ? month.slice(0, 4) : monthLabel(month));
   $$('.pseg button').forEach(b => b.classList.toggle('on', b.dataset.p === pmode));
+  renderSelBar();
   ({ add: renderAdd, list: renderList, trips: renderTrips, stats: renderStats, settings: renderSettings })[view]();
 }
 window.addEventListener('online', schedule); window.addEventListener('offline', schedule);
@@ -247,7 +248,8 @@ const opts = (list, sel) => list.map(p => `<option ${p === sel ? 'selected' : ''
 
 function itemHTML(e, showDay) {
   const c = cat(e.cat), t = e.trip && trip(e.trip);
-  return `<div class="item" data-id="${esc(e.id)}" data-trip="${e.trip || ''}"><div class="ic" data-ic="1" style="background:${c.color}22">${c.icon}</div><div class="mid"><div class="t">${esc(e.note || c.name)}</div><div class="s">${esc(c.name)} · ${e.mode} · ${esc(e.person)}${t && view !== 'trips' ? ' · ✈ ' + esc(t.name) : ''}${showDay ? ' · ' + dayLabel(e.date) : ''}</div></div><div class="a${isInc(e) ? ' inc' : ''}">${isInc(e) ? '+' : ''}${money(e.amount)}</div></div>`;
+  const sm = multi && view === 'list', on = sm && picked.has(e.id);
+  return `<div class="item${on ? ' picked' : ''}" data-id="${esc(e.id)}" data-trip="${e.trip || ''}">${sm ? `<span class="tick">${on ? '✓' : ''}</span>` : ''}<div class="ic" ${sm ? '' : 'data-ic="1"'} style="background:${c.color}22">${c.icon}</div><div class="mid"><div class="t">${esc(e.note || c.name)}</div><div class="s">${esc(c.name)} · ${e.mode} · ${esc(e.person)}${t && view !== 'trips' ? ' · ✈ ' + esc(t.name) : ''}${showDay ? ' · ' + dayLabel(e.date) : ''}</div></div><div class="a${isInc(e) ? ' inc' : ''}">${isInc(e) ? '+' : ''}${money(e.amount)}</div></div>`;
 }
 function groupedHTML(rows) {
   const g = {}; rows.forEach(e => (g[e.date] = g[e.date] || []).push(e));
@@ -255,6 +257,8 @@ function groupedHTML(rows) {
 }
 document.addEventListener('click', ev => {
   const it = ev.target.closest('.item[data-id]'); if (!it) return;
+  if (longPressed) { longPressed = false; return; }
+  if (multi && view === 'list') { togglePick(it.dataset.id); return; }
   if (ev.target.closest('[data-ic]')) openCatSheet(it.dataset.id, it.dataset.trip); else startEdit(it.dataset.id, it.dataset.trip);
 });
 
@@ -331,11 +335,69 @@ function renderList() {
   const ft = $('#fType').value;
   const q = $('#fSearch').value.trim().toLowerCase();
   const rows = S.expenses.filter(e => e.date.startsWith(pKey()) && (!ft || (ft === 'in') === isInc(e))).filter(e => (!fp || e.person === fp) && (!fc || e.cat === fc) && (!q || (e.note || '').toLowerCase().includes(q) || e.cat.toLowerCase().includes(q)));
+  listRows = rows; picked.forEach(id => { if (!rows.some(e => e.id === id)) picked.delete(id); }); renderSelBar();
   const o = sum(rows.filter(e => !isInc(e) && !isInvest(e))), iv = sum(rows.filter(e => !isInc(e) && isInvest(e))), i = sum(rows.filter(isInc));
   $('#listSum').innerHTML = rows.length ? `${rows.length} entr${rows.length > 1 ? 'ies' : 'y'}${o ? ' · spent ' + money(o) : ''}${iv ? ' · invested ' + money(iv) : ''}${i ? ` · <span class="inc">received +${money(i)}</span>` : ''}` : '';
   $('#list').innerHTML = rows.length ? groupedHTML(rows) : `<div class="empty">Nothing here for this ${perWord(pKey())}.</div>`;
 }
 ['#fPerson', '#fCat', '#fType'].forEach(s => $(s).onchange = renderList); $('#fSearch').oninput = renderList;
+
+// ---------- multi-select (Expenses list) ----------
+let multi = false, picked = new Set(), listRows = [], longPressed = false, lpTimer = 0;
+function setSelMode(on) { multi = on; if (!on) picked.clear(); $('#selBtn').textContent = on ? 'Cancel' : 'Select'; renderList(); }
+function togglePick(id) { if (picked.has(id)) picked.delete(id); else picked.add(id); renderList(); }
+function renderSelBar() {
+  const show = multi && view === 'list'; $('#selBar').classList.toggle('hidden', !show); document.body.classList.toggle('selecting', show);
+  if (!show) return;
+  const sel = listRows.filter(e => picked.has(e.id));
+  $('#selCount').innerHTML = sel.length ? `<b>${sel.length} selected</b><span class="muted"> · ${money(sum(sel))}</span>` : '<span class="muted">Tap entries to select</span>';
+  $$('#selBar [data-bulk]').forEach(b => { if (b.dataset.bulk !== 'all') b.disabled = !sel.length; });
+  $('#selBar [data-bulk=all]').textContent = sel.length === listRows.length && listRows.length ? 'None' : 'All';
+}
+$('#selBtn').onclick = () => setSelMode(!multi);
+$('#list').addEventListener('pointerdown', ev => {
+  const it = ev.target.closest('.item[data-id]'); if (!it || multi) return;
+  clearTimeout(lpTimer); lpTimer = setTimeout(() => { longPressed = true; multi = true; picked.add(it.dataset.id); $('#selBtn').textContent = 'Cancel'; renderList(); if (navigator.vibrate) navigator.vibrate(30); }, 550);
+});
+['pointerup', 'pointercancel', 'pointerleave', 'scroll'].forEach(t => $('#list').addEventListener(t, () => clearTimeout(lpTimer), true));
+window.addEventListener('scroll', () => clearTimeout(lpTimer), { passive: true });
+$('#selBar').onclick = ev => {
+  const b = ev.target.closest('[data-bulk]'); if (!b || b.disabled) return;
+  const sel = listRows.filter(e => picked.has(e.id));
+  switch (b.dataset.bulk) {
+    case 'all': if (picked.size === listRows.length) picked.clear(); else listRows.forEach(e => picked.add(e.id)); return renderList();
+    case 'note': return bulkNote(sel);
+    case 'cat': return bulkCat(sel);
+    case 'del': if (!confirm(`Delete ${sel.length} entr${sel.length > 1 ? 'ies' : 'y'}?`)) return; putMany(sel, true); toast(`Deleted ${sel.length}`); return setSelMode(false);
+  }
+};
+function bulkNote(sel) {
+  const same = sel.every(e => e.note === sel[0].note) ? sel[0].note : '';
+  openSheet(`<h3>Note for ${sel.length} entr${sel.length > 1 ? 'ies' : 'y'}</h3>
+    <input id="bNote" value="${esc(same)}" placeholder="e.g. US MARKET" maxlength="120">
+    <div class="seg" style="margin:12px 0 0"><button type="button" data-how="replace" class="on">Replace note</button><button type="button" data-how="add">Add to note</button></div>
+    <p class="muted" id="bHow" style="margin:6px 0 0">The old note is replaced. Bank details are kept in the original statement.</p>
+    <button class="primary" id="bGo">Save note</button><button style="width:100%;margin-top:8px" id="bNo">Cancel</button>`, ev => {
+    const h = ev.target.closest('[data-how]');
+    if (h) { $$('#sheet [data-how]').forEach(x => x.classList.toggle('on', x === h)); $('#bHow').textContent = h.dataset.how === 'add' ? 'Added after the existing note, e.g. "ZERODHA · US MARKET".' : 'The old note is replaced. Bank details are kept in the original statement.'; return; }
+    if (ev.target.id === 'bNo') return closeSheet();
+    if (ev.target.id !== 'bGo') return;
+    const v = $('#bNote').value.trim(), add = $('#sheet [data-how=add]').classList.contains('on');
+    if (!v && add) return toast('Type a note to add');
+    putMany(sel.map(e => ({ ...e, note: add && e.note ? (e.note.includes(v) ? e.note : e.note + ' · ' + v) : v })));
+    closeSheet(); toast(`Note saved on ${sel.length} entr${sel.length > 1 ? 'ies' : 'y'}`); setSelMode(false);
+  });
+  setTimeout(() => { const i = $('#bNote'); i.focus(); i.select(); }, 60);
+}
+function bulkCat(sel) {
+  const inc = sel.filter(isInc).length;
+  if (inc && inc < sel.length) return toast('Select only spending or only income to change category', 3500);
+  const list = inc ? S.incCats : S.categories;
+  openSheet(`<h3>Category for ${sel.length} entr${sel.length > 1 ? 'ies' : 'y'}</h3><div class="chips" style="margin-top:10px">${list.map(c => `<button class="chip" data-pick="${esc(c.name)}">${c.icon} ${esc(c.name)}</button>`).join('')}</div>`, ev => {
+    const b = ev.target.closest('[data-pick]'); if (!b) return;
+    putMany(sel.map(e => ({ ...e, cat: b.dataset.pick }))); closeSheet(); toast(`Moved ${sel.length} to ${b.dataset.pick}`); setSelMode(false);
+  });
+}
 
 // ---------- Trips ----------
 function settle(t) {

@@ -110,6 +110,14 @@ canvas{width:100%;display:block}
 .legend .lg.dim{opacity:.35}
 .legend .lg.on{font-weight:700}
 .dhead{display:flex;justify-content:space-between;align-items:center;margin:14px 0 4px;padding-top:10px;border-top:1px solid var(--line)}
+.tick{width:22px;height:22px;border:2px solid var(--line);border-radius:6px;flex:none;display:grid;place-items:center;font-size:14px;font-weight:700;color:var(--on-accent)}
+.item.picked .tick{background:var(--accent);border-color:var(--accent)}
+.item.picked{background:var(--accent-soft);margin:0 -8px;padding-left:8px;padding-right:8px;border-radius:10px}
+.tick+.ic::after{display:none}
+.item{user-select:none;-webkit-user-select:none}
+.selbar{position:fixed;left:0;right:0;bottom:calc(56px + env(safe-area-inset-bottom));z-index:12;background:var(--card);border-top:1px solid var(--line);box-shadow:0 -4px 14px #0002;padding:10px 16px}
+.selbtns{display:flex;gap:6px;margin-top:8px}.selbtns button{flex:1;padding:9px 6px;font-size:14px}
+body.selecting main{padding-bottom:180px}
 .banner{background:var(--accent-soft);color:var(--text);border-radius:12px;padding:12px 14px;margin-bottom:12px;font-size:14px}
 .gbtn{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;margin-top:10px;font-weight:600}
 </style>
@@ -149,7 +157,7 @@ canvas{width:100%;display:block}
   <div class="monthbar"><button data-m="-1">‹</button><strong class="mlabel"></strong><button data-m="1">›</button></div>
   <div class="filters"><select id="fType"><option value="">All</option><option value="out">Spending</option><option value="in">Income</option></select><select id="fPerson"></select><select id="fCat"></select></div>
   <input id="fSearch" placeholder="Search notes…" style="margin:0 0 6px">
-  <div id="listSum" class="muted"></div>
+  <div class="row" style="align-items:center"><div id="listSum" class="muted"></div><button class="link" id="selBtn" style="flex:0 0 auto">Select</button></div>
   <div id="list"></div>
   <p class="muted" style="text-align:center">Your personal spending and income. Trip expenses live in Trips.</p>
 </section>
@@ -215,6 +223,7 @@ canvas{width:100%;display:block}
   <button data-v="stats"><b>▥</b>Stats</button>
   <button data-v="settings"><b>⚙</b>Settings</button>
 </nav>
+<div id="selBar" class="selbar hidden"><div id="selCount"></div><div class="selbtns"><button data-bulk="all">All</button><button data-bulk="note">✎ Note</button><button data-bulk="cat">🏷 Category</button><button data-bulk="del" class="danger">🗑</button></div></div>
 <input type="file" id="impFile" hidden accept=".csv,.txt,.xls,.xlsx,.json,text/csv,text/plain,application/json,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet">
 <div class="sheet-bg" id="sheetBg"><div class="sheet" id="sheet"></div></div>
 <div class="toast" id="toast"></div>
