@@ -7,6 +7,9 @@ const LKEY = 'kharcha_v1';
 const MODES = ['UPI', 'Card', 'Cash', 'Bank'];
 const DEFAULT_CATS = [['Food','🍛','#e8833a'],['Groceries','🛒','#43a047'],['Transport','⛽','#1e88e5'],['Shopping','🛍️','#8e24aa'],['Bills','💡','#fb8c00'],['Rent','🏠','#6d4c41'],['Health','💊','#e53935'],['Entertainment','🎬','#00acc1'],['Travel','✈️','#3949ab'],['Stay','🏨','#5e35b1'],['Education','📚','#546e7a'],['Gifts','🎁','#d81b60'],['Other','📦','#9e9e9e']];
 const KEYWORDS = [['Food',/swiggy|zomato|restaurant|cafe|bakery|food|dominos|kfc|mcdonald|starbucks|biryani|mess\b/],['Groceries',/bigbasket|blinkit|zepto|dmart|grocer|supermarket|instamart|more retail|reliance fresh|jiomart|vegetable/],['Transport',/uber|\bola\b|rapido|petrol|fuel|hpcl|bpcl|iocl|indian oil|shell|fastag|metro|irctc|redbus|parking|toll/],['Shopping',/amazon|flipkart|myntra|ajio|meesho|nykaa|croma|decathlon/],['Bills',/electricity|tneb|tangedco|airtel|\bjio\b|vodafone|bsnl|recharge|broadband|\bgas\b|bill|dth/],['Health',/pharm|apollo|medic|hospital|clinic|\blab\b|diagnos|1mg|netmeds/],['Entertainment',/netflix|hotstar|prime video|spotify|bookmyshow|pvr|inox|youtube/],['Stay',/oyo|hotel|resort|airbnb|homestay|lodge|treebo|fabhotel/],['Travel',/makemytrip|goibibo|indigo|air india|vistara|akasa|booking\.com|cleartrip|ixigo/],['Education',/udemy|coursera|school|college|tuition|books/],['Rent',/\brent\b|nobroker/]];
+const DEFAULT_INC = [['Salary','💼','#2e7d32'],['Interest','🏦','#00897b'],['Refund','↩️','#5c6bc0'],['Cashback','🎉','#f9a825'],['Gift received','🎁','#ec407a'],['Other income','💰','#7cb342']];
+const INC_KEYWORDS = [['Salary',/salary|\bsal\b|payroll|wages/],['Interest',/int\.? ?pd|interest|int\.? ?coll/],['Refund',/refund|reversal|\brev\b|rfnd/],['Cashback',/cashback|cash back|reward/]];
+const OWN_IN_RE = /self transfer|own account|sweep|fd clos|fd prem|redemption|mutual fund|zerodha|groww|upstox|kuvera|indmoney/i;
 const TRANSFER_RE = /credit ?card|cc ?(bill|pay)|cred club|\bcred\b|card ?payment|autopay|\bsip\b|mutual fund|zerodha|groww|upstox|indmoney|kuvera|\bnps\b|\bppf\b|rd inst|self transfer|own account/i;
 
 const $ = s => document.querySelector(s), $$ = s => [...document.querySelectorAll(s)];
@@ -30,13 +33,13 @@ function css(v) { return getComputedStyle(document.documentElement).getPropertyV
 let tt; function toast(m, ms = 2600) { const t = $('#toast'); t.textContent = m; t.classList.add('show'); clearTimeout(tt); tt = setTimeout(() => t.classList.remove('show'), ms); }
 
 // ================= state =================
-const blankMeta = () => ({ categories: DEFAULT_CATS.map(([name, icon, color]) => ({ name, icon, color, budget: 0 })), people: ['Me'], rules: [], lastPerson: 'Me', name: '' });
+const blankMeta = () => ({ categories: DEFAULT_CATS.map(([name, icon, color]) => ({ name, icon, color, budget: 0 })), incCats: DEFAULT_INC.map(([name, icon, color]) => ({ name, icon, color })), people: ['Me'], rules: [], lastPerson: 'Me', name: '' });
 let S = { ...blankMeta(), expenses: [], trips: [] };
 let TE = {};                       // tripId -> [expenses]
 let user = null, fb = null, cloud = false, authKnown = false, pending = 0;
 let unsubs = [], tripUnsubs = {}, migrated = false;
 let month = mk(today()), view = 'add', curTrip = null;
-let selCat = 'Food', selMode = 'UPI', edit = null; // edit = {id, trip}
+let selCat = 'Food', selInc = 'Salary', selType = 'out', selMode = 'UPI', edit = null; // edit = {id, trip}
 
 // Accepts any saved shape (v1 with category ids, v3, cloud docs) and returns names-based data.
 function normalize(b) {
@@ -44,12 +47,13 @@ function normalize(b) {
   if (!b || typeof b !== 'object') return out;
   const idMap = {};
   if (Array.isArray(b.categories) && b.categories.length) out.categories = b.categories.filter(c => c && c.name).map(c => { const n = String(c.name).slice(0, 24); if (c.id) idMap[c.id] = n; return { name: n, icon: c.icon || '🏷️', color: c.color || '#9e9e9e', budget: +c.budget || 0 }; });
+  if (Array.isArray(b.incCats) && b.incCats.length) out.incCats = b.incCats.filter(c => c && c.name).map(c => ({ name: String(c.name).slice(0, 24), icon: c.icon || '💰', color: c.color || '#7cb342' }));
   const cn = c => idMap[c] || c || 'Other';
   if (Array.isArray(b.people) && b.people.length) out.people = b.people.map(String);
   if (b.lastPerson) out.lastPerson = String(b.lastPerson);
   if (b.name) out.name = String(b.name);
   out.rules = (Array.isArray(b.rules) ? b.rules : []).filter(r => r && r.k).map(r => ({ k: String(r.k), cat: cn(r.cat) }));
-  const fixE = e => ({ id: String(e.id || uid()), ts: +e.ts || Date.now(), date: String(e.date), amount: r2(+e.amount), cat: cn(e.cat), mode: MODES.includes(e.mode) ? e.mode : 'UPI', person: String(e.person || 'Me'), note: String(e.note || '') });
+  const fixE = e => ({ id: String(e.id || uid()), ts: +e.ts || Date.now(), date: String(e.date), amount: r2(+e.amount), cat: cn(e.cat), mode: MODES.includes(e.mode) ? e.mode : 'UPI', person: String(e.person || 'Me'), note: String(e.note || ''), ...(e.type === 'in' ? { type: 'in' } : {}) });
   const ok = e => e && /^\d{4}-\d{2}-\d{2}$/.test(e.date) && +e.amount > 0;
   out.expenses = (b.expenses || []).filter(ok).map(fixE);
   (b.trips || []).forEach(t => {
@@ -62,27 +66,31 @@ function normalize(b) {
   return out;
 }
 function loadLocal() { try { const raw = localStorage.getItem(LKEY); return raw ? normalize(JSON.parse(raw)) : null; } catch (e) { return null; } }
-const metaOf = o => ({ categories: o.categories, people: o.people, rules: o.rules, lastPerson: o.lastPerson, name: o.name || '' });
+const metaOf = o => ({ categories: o.categories, incCats: o.incCats, people: o.people, rules: o.rules, lastPerson: o.lastPerson, name: o.name || '' });
 function saveLocal() { if (cloud) return; try { localStorage.setItem(LKEY, JSON.stringify({ v: 3, ...metaOf(S), expenses: S.expenses, trips: S.trips, tripExp: TE })); } catch (e) { toast('Could not save — storage may be full'); } }
 function useLocal() { const L = loadLocal() || normalize(null); TE = L.tripExp; delete L.tripExp; S = L; }
 
-const cat = n => S.categories.find(c => c.name === n) || { name: n || 'Other', icon: '🏷️', color: '#9e9e9e', budget: 0 };
+const cat = n => S.categories.find(c => c.name === n) || S.incCats.find(c => c.name === n) || { name: n || 'Other', icon: '🏷️', color: '#9e9e9e', budget: 0 };
 const trip = id => S.trips.find(t => t.id === id);
 const tripByName = n => S.trips.find(t => t.name.toLowerCase() === String(n).trim().toLowerCase());
 const tripExp = id => TE[id] || [];
 const allExp = () => S.expenses.concat(...Object.values(TE));
-const inMonth = m => S.expenses.filter(e => mk(e.date) === m);
+const isInc = e => e.type === 'in';
+const inMonth = m => S.expenses.filter(e => mk(e.date) === m && !isInc(e));          // spending only
+const incMonth = m => S.expenses.filter(e => mk(e.date) === m && isInc(e));          // income only
+const isRefund = e => isInc(e) && /refund|cashback/i.test(e.cat);
 const findExp = (id, t) => (t ? tripExp(t) : S.expenses).find(e => e.id === id);
 const meIn = t => (t && t.names && user && t.names[user.uid]) || myName();
 const myName = () => S.name || (user && (user.displayName || (user.email || '').split('@')[0])) || S.people[0] || 'Me';
 const sig = e => e.date + '|' + e.amount + '|' + (e.note || '').toLowerCase();
+function ensureIncCat(n) { n = String(n || 'Other income').trim().slice(0, 24) || 'Other income'; if (!S.incCats.some(c => c.name.toLowerCase() === n.toLowerCase())) { S.incCats.push({ name: n, icon: '💰', color: '#7cb342' }); return true; } return false; }
 function ensureCat(n) { n = String(n || 'Other').trim().slice(0, 24) || 'Other'; if (!S.categories.some(c => c.name.toLowerCase() === n.toLowerCase())) { S.categories.push({ name: n, icon: '🏷️', color: '#9e9e9e', budget: 0 }); return true; } return false; }
-const catName = n => (S.categories.find(c => c.name.toLowerCase() === String(n).trim().toLowerCase()) || {}).name || String(n).trim();
+const catName = n => ([...S.categories, ...S.incCats].find(c => c.name.toLowerCase() === String(n).trim().toLowerCase()) || {}).name || String(n).trim();
 
 // ================= data writes (local or cloud) =================
 function track(p) { pending++; schedule(); return p.catch(fail).finally(() => { pending--; schedule(); }); }
 function fail(err) { console.error(err); const c = err && err.code || ''; toast(/permission/.test(c) ? 'Not allowed — check Firestore rules' : 'Sync error: ' + (c || err.message), 4500); }
-function strip(e) { const o = { date: e.date, amount: e.amount, cat: e.cat, mode: e.mode, person: e.person, note: e.note || '', ts: e.ts || Date.now() }; if (e.trip) o.trip = e.trip; if (cloud) o.by = user.uid; return o; }
+function strip(e) { const o = { date: e.date, amount: e.amount, cat: e.cat, mode: e.mode, person: e.person, note: e.note || '', ts: e.ts || Date.now() }; if (isInc(e)) o.type = 'in'; if (e.trip) o.trip = e.trip; if (cloud) o.by = user.uid; return o; }
 function eRef(e) { const F = fb.F; return e.trip ? F.doc(fb.db, 'trips', e.trip, 'expenses', e.id) : F.doc(fb.db, 'users', user.uid, 'expenses', e.id); }
 function collOf(e) { if (!e.trip) return S.expenses; return TE[e.trip] || (TE[e.trip] = []); }
 function localPut(e) { const c = collOf(e), i = c.findIndex(x => x.id === e.id); if (i >= 0) c[i] = e; else c.push(e); }
@@ -158,14 +166,14 @@ function startCloud() {
     schedule();
   }, fail));
 }
-function normalizeE(d) { const x = d.data(); return { id: d.id, ts: +x.ts || 0, date: x.date, amount: +x.amount, cat: x.cat || 'Other', mode: x.mode || 'UPI', person: x.person || '', note: x.note || '', by: x.by }; }
+function normalizeE(d) { const x = d.data(); return { id: d.id, ts: +x.ts || 0, date: x.date, amount: +x.amount, cat: x.cat || 'Other', mode: x.mode || 'UPI', person: x.person || '', note: x.note || '', by: x.by, ...(x.type === 'in' ? { type: 'in' } : {}) }; }
 function migrateLocal(fresh) {
   if (migrated) return; migrated = true;
   const L = loadLocal(); if (!L) return;
   const tripCount = L.trips.length, n = L.expenses.length + tripCount;
   if (!n) { localStorage.removeItem(LKEY); return; }
   if (!fresh && !confirm(`This phone has ${L.expenses.length} expenses and ${tripCount} trips saved before you signed in. Add them to your account?`)) return;
-  if (!fresh) { L.categories.forEach(c => { if (!S.categories.some(x => x.name === c.name)) S.categories.push(c); }); L.rules.forEach(r => { if (!S.rules.some(x => x.k === r.k)) S.rules.push(r); }); saveMeta(); }
+  if (!fresh) { L.categories.forEach(c => { if (!S.categories.some(x => x.name === c.name)) S.categories.push(c); }); L.incCats.forEach(c => { if (!S.incCats.some(x => x.name === c.name)) S.incCats.push(c); }); L.rules.forEach(r => { if (!S.rules.some(x => x.k === r.k)) S.rules.push(r); }); saveMeta(); }
   putMany(L.expenses);
   L.trips.forEach(t => { const id = newTripId(); putTrip({ ...t, id }, true); putMany((L.tripExp[t.id] || []).map(e => ({ ...e, trip: id }))); });
   try { localStorage.setItem(LKEY + '_backup', localStorage.getItem(LKEY)); localStorage.removeItem(LKEY); } catch (e) {}
@@ -232,11 +240,11 @@ const opts = (list, sel) => list.map(p => `<option ${p === sel ? 'selected' : ''
 
 function itemHTML(e, showDay) {
   const c = cat(e.cat), t = e.trip && trip(e.trip);
-  return `<div class="item" data-id="${esc(e.id)}" data-trip="${e.trip || ''}"><div class="ic" data-ic="1" style="background:${c.color}22">${c.icon}</div><div class="mid"><div class="t">${esc(e.note || c.name)}</div><div class="s">${esc(c.name)} · ${e.mode} · ${esc(e.person)}${t && view !== 'trips' ? ' · ✈ ' + esc(t.name) : ''}${showDay ? ' · ' + dayLabel(e.date) : ''}</div></div><div class="a">${money(e.amount)}</div></div>`;
+  return `<div class="item" data-id="${esc(e.id)}" data-trip="${e.trip || ''}"><div class="ic" data-ic="1" style="background:${c.color}22">${c.icon}</div><div class="mid"><div class="t">${esc(e.note || c.name)}</div><div class="s">${esc(c.name)} · ${e.mode} · ${esc(e.person)}${t && view !== 'trips' ? ' · ✈ ' + esc(t.name) : ''}${showDay ? ' · ' + dayLabel(e.date) : ''}</div></div><div class="a${isInc(e) ? ' inc' : ''}">${isInc(e) ? '+' : ''}${money(e.amount)}</div></div>`;
 }
 function groupedHTML(rows) {
   const g = {}; rows.forEach(e => (g[e.date] = g[e.date] || []).push(e));
-  return Object.keys(g).sort().reverse().map(d => `<div class="day"><span>${dayLabel(d)}</span><span>${money(sum(g[d]))}</span></div><div class="card" style="padding:2px 14px">${g[d].sort((a, b) => b.ts - a.ts).map(e => itemHTML(e)).join('')}</div>`).join('');
+  return Object.keys(g).sort().reverse().map(d => { const o = sum(g[d].filter(e => !isInc(e))), i = sum(g[d].filter(isInc)); return `<div class="day"><span>${dayLabel(d)}</span><span>${o ? money(o) : ''}${o && i ? ' · ' : ''}${i ? '<span class="inc">+' + money(i) + '</span>' : ''}</span></div><div class="card" style="padding:2px 14px">${g[d].sort((a, b) => b.ts - a.ts).map(e => itemHTML(e)).join('')}</div>`; }).join('');
 }
 document.addEventListener('click', ev => {
   const it = ev.target.closest('.item[data-id]'); if (!it) return;
@@ -248,7 +256,14 @@ function renderAdd() {
   const tv = $('#impTarget').value; $('#impTarget').innerHTML = targetOptions(tv); if (tv && !trip(tv)) $('#impTarget').value = '';
   const fv = $('#fFor').value; $('#fFor').innerHTML = targetOptions(fv);
   if (!S.categories.some(c => c.name === selCat)) selCat = (S.categories[0] || {}).name;
-  $('#catChips').innerHTML = S.categories.map(c => `<button type="button" class="chip ${c.name === selCat ? 'sel' : ''}" data-c="${esc(c.name)}">${c.icon} ${esc(c.name)}</button>`).join('');
+  if (!S.incCats.some(c => c.name === selInc)) selInc = (S.incCats[0] || {}).name;
+  const inc = selType === 'in', cur = inc ? selInc : selCat;
+  $$('#typeSeg button').forEach(b => b.classList.toggle('on', b.dataset.t === selType));
+  $('#forWrap').classList.toggle('hidden', inc); if (inc) $('#fFor').value = '';
+  $('#personLbl').textContent = inc ? 'Received by' : 'Paid by';
+  $('#amtSign').textContent = inc ? '+₹' : '₹';
+  $('#note').placeholder = inc ? 'Where is it from?' : 'What was it for?';
+  $('#catChips').innerHTML = (inc ? S.incCats : S.categories).map(c => `<button type="button" class="chip ${c.name === cur ? 'sel' : ''}" data-c="${esc(c.name)}">${c.icon} ${esc(c.name)}</button>`).join('');
   $('#modeChips').innerHTML = MODES.map(m => `<button type="button" class="chip ${m === selMode ? 'sel' : ''}" data-mode="${m}">${m}</button>`).join('');
   fillPerson();
   if (!$('#date').value) $('#date').value = today();
@@ -261,39 +276,40 @@ function fillPerson(force) {
   $('#person').innerHTML = opts(list, pick);
 }
 $('#fFor').onchange = () => fillPerson();
-$('#catChips').onclick = e => { const b = e.target.closest('[data-c]'); if (b) { selCat = b.dataset.c; renderAdd(); } };
+$('#catChips').onclick = e => { const b = e.target.closest('[data-c]'); if (b) { if (selType === 'in') selInc = b.dataset.c; else selCat = b.dataset.c; renderAdd(); } };
+$('#typeSeg').onclick = e => { const b = e.target.closest('[data-t]'); if (b && !edit) { selType = b.dataset.t; renderAdd(); fillPerson(); } };
 $('#modeChips').onclick = e => { const b = e.target.closest('[data-mode]'); if (b) { selMode = b.dataset.mode; renderAdd(); } };
 function openForm(on = true) { $('#f').classList.toggle('hidden', !on); $('#manualBtn').textContent = on ? '✕ Close form' : '✎ Add manually'; if (on) setTimeout(() => $('#amt').focus(), 50); }
 $('#manualBtn').onclick = () => { const on = $('#f').classList.contains('hidden'); if (!on) resetForm(); openForm(on); };
 function startEdit(id, t) {
   const e = findExp(id, t); if (!e) return;
   edit = { id, trip: t || '' }; go('add');
-  $('#fFor').value = t || ''; $('#amt').value = e.amount; selCat = e.cat; selMode = e.mode; $('#date').value = e.date; $('#note').value = e.note || '';
+  $('#fFor').value = t || ''; $('#amt').value = e.amount; selType = isInc(e) ? 'in' : 'out'; if (isInc(e)) selInc = e.cat; else selCat = e.cat; selMode = e.mode; $('#date').value = e.date; $('#note').value = e.note || '';
   renderAdd(); fillPerson(e.person);
   $('#saveBtn').textContent = 'Update expense'; $('#editBtns').classList.remove('hidden'); openForm(true);
 }
-function resetForm() { edit = null; const f = $('#fFor').value; $('#f').reset(); $('#fFor').value = f; $('#date').value = today(); $('#saveBtn').textContent = 'Save expense'; $('#editBtns').classList.add('hidden'); }
+function resetForm() { edit = null; selType = 'out'; const f = $('#fFor').value; $('#f').reset(); $('#fFor').value = f; $('#date').value = today(); $('#saveBtn').textContent = 'Save expense'; $('#editBtns').classList.add('hidden'); }
 $('#cancelEdit').onclick = () => { resetForm(); openForm(false); renderAdd(); };
 $('#delBtn').onclick = () => { const e = edit && findExp(edit.id, edit.trip); if (!e || !confirm('Delete this expense?')) return; delExp(e); resetForm(); openForm(false); toast('Deleted'); };
-$('#note').addEventListener('change', () => { if (edit) return; const r = ruleFor($('#note').value); if (r) { selCat = r; renderAdd(); } });
+$('#note').addEventListener('change', () => { if (edit) return; const r = ruleFor($('#note').value, selType); if (r) { if (selType === 'in') selInc = r; else selCat = r; renderAdd(); } });
 $('#f').onsubmit = ev => {
   ev.preventDefault();
   const amount = parseFloat($('#amt').value); if (!(amount > 0)) return toast('Enter an amount');
-  const forT = $('#fFor').value;
-  const data = { amount: r2(amount), cat: selCat, mode: selMode, date: $('#date').value || today(), person: $('#person').value, note: $('#note').value.trim() };
+  const inc = selType === 'in', forT = inc ? '' : $('#fFor').value;
+  const data = { amount: r2(amount), cat: inc ? selInc : selCat, mode: selMode, date: $('#date').value || today(), person: $('#person').value, note: $('#note').value.trim() };
   let changed = null, e;
   if (edit) {
     const old = findExp(edit.id, edit.trip); if (!old) { resetForm(); return; }
-    e = { ...old, ...data }; delete e.trip; if (forT) e.trip = forT;
+    e = { ...old, ...data }; delete e.trip; delete e.type; if (inc) e.type = 'in'; if (forT) e.trip = forT;
     if ((old.trip || '') !== forT) delExp(old);
     if (old.cat !== data.cat) changed = e;
     putExp(e); toast('Updated');
   } else {
-    e = { id: uid(), ts: Date.now(), ...data }; if (forT) e.trip = forT;
-    putExp(e); toast('Saved ' + money(e.amount));
+    e = { id: uid(), ts: Date.now(), ...data }; if (inc) e.type = 'in'; if (forT) e.trip = forT;
+    putExp(e); toast((inc ? 'Income saved +' : 'Saved ') + money(e.amount));
   }
   if (!forT && S.lastPerson !== data.person) { S.lastPerson = data.person; saveMeta(); }
-  if (!forT) budgetCheck(data.cat, mk(data.date));
+  if (!forT && !inc) budgetCheck(data.cat, mk(data.date));
   const wasEdit = !!edit; resetForm();
   if (changed) offerRemember(changed); else if (wasEdit) openForm(false); else $('#amt').focus();
 };
@@ -303,13 +319,15 @@ function budgetCheck(n, m) { const c = cat(n); if (!c.budget) return; const sp =
 function renderList() {
   const fp = $('#fPerson').value, fc = $('#fCat').value;
   $('#fPerson').innerHTML = '<option value="">Everyone</option>' + opts(S.people, fp); $('#fPerson').value = fp;
-  $('#fCat').innerHTML = '<option value="">All categories</option>' + S.categories.map(c => `<option value="${esc(c.name)}">${c.icon} ${esc(c.name)}</option>`).join(''); $('#fCat').value = fc;
+  $('#fCat').innerHTML = '<option value="">All categories</option><optgroup label="Spending">' + S.categories.map(c => `<option value="${esc(c.name)}">${c.icon} ${esc(c.name)}</option>`).join('') + '</optgroup><optgroup label="Income">' + S.incCats.map(c => `<option value="${esc(c.name)}">${c.icon} ${esc(c.name)}</option>`).join('') + '</optgroup>'; $('#fCat').value = fc;
+  const ft = $('#fType').value;
   const q = $('#fSearch').value.trim().toLowerCase();
-  const rows = inMonth(month).filter(e => (!fp || e.person === fp) && (!fc || e.cat === fc) && (!q || (e.note || '').toLowerCase().includes(q) || e.cat.toLowerCase().includes(q)));
-  $('#listSum').textContent = rows.length ? `${rows.length} expense${rows.length > 1 ? 's' : ''} · ${money(sum(rows))}` : '';
+  const rows = S.expenses.filter(e => mk(e.date) === month && (!ft || (ft === 'in') === isInc(e))).filter(e => (!fp || e.person === fp) && (!fc || e.cat === fc) && (!q || (e.note || '').toLowerCase().includes(q) || e.cat.toLowerCase().includes(q)));
+  const o = sum(rows.filter(e => !isInc(e))), i = sum(rows.filter(isInc));
+  $('#listSum').innerHTML = rows.length ? `${rows.length} entr${rows.length > 1 ? 'ies' : 'y'}${o ? ' · spent ' + money(o) : ''}${i ? ` · <span class="inc">received +${money(i)}</span>` : ''}` : '';
   $('#list').innerHTML = rows.length ? groupedHTML(rows) : '<div class="empty">Nothing here for this month.</div>';
 }
-['#fPerson', '#fCat'].forEach(s => $(s).onchange = renderList); $('#fSearch').oninput = renderList;
+['#fPerson', '#fCat', '#fType'].forEach(s => $(s).onchange = renderList); $('#fSearch').oninput = renderList;
 
 // ---------- Trips ----------
 function settle(t) {
@@ -404,9 +422,12 @@ function barColor(p) { return p >= 1 ? css('--bad') : p >= .8 ? css('--warn') : 
 function canvasCtx(cv) { const dpr = window.devicePixelRatio || 1, w = cv.clientWidth, h = cv.clientHeight; cv.width = w * dpr; cv.height = h * dpr; const x = cv.getContext('2d'); x.setTransform(dpr, 0, 0, dpr, 0, 0); x.clearRect(0, 0, w, h); return { x, w, h }; }
 function renderStats() {
   const ex = inMonth(month), tot = sum(ex), prev = sum(inMonth(shiftMonth(month, -1)));
+  const incs = incMonth(month), refunds = sum(incs.filter(isRefund)), income = sum(incs.filter(e => !isRefund(e))), net = tot - refunds, saved = income - net;
   const isCur = month === mk(today()); const [y, mo] = month.split('-').map(Number); const days = isCur ? new Date().getDate() : new Date(y, mo, 0).getDate();
   const diff = prev ? (tot - prev) / prev : null;
-  $('#statTop').innerHTML = `<div class="muted">Personal spending</div><div class="big">${money(tot)}</div><div class="muted">${ex.length} expenses · ${money(tot / days)}/day avg${diff !== null ? ` · <span class="${diff > 0 ? 'up' : 'down'}">${diff > 0 ? '▲' : '▼'} ${Math.abs(Math.round(diff * 100))}%</span> vs last month` : ''}</div>`;
+  $('#statTop').innerHTML = `<div class="trio"><div><div class="muted">Income</div><b class="inc">${money(income)}</b></div><div><div class="muted">Spent</div><b>${money(net)}</b></div><div><div class="muted">${saved >= 0 ? 'Saved' : 'Overspent'}</div><b class="${saved >= 0 ? 'down' : 'up'}">${money(Math.abs(saved))}</b></div></div>
+    ${income ? `<div class="bar" style="margin-top:10px"><i style="width:${Math.min(100, net / income * 100)}%;background:${barColor(net / income)}"></i></div><div class="muted" style="margin-top:6px">${saved >= 0 ? `You saved ${Math.round(saved / income * 100)}% of your income` : `Spending is ${money(-saved)} more than income`}</div>` : '<div class="muted" style="margin-top:6px">Add income (or upload a statement) to see savings.</div>'}
+    <div class="muted" style="margin-top:4px">${ex.length} expenses · ${money(Math.round(net / days))}/day avg${refunds ? ` · ${money(refunds)} refunds/cashback deducted` : ''}${diff !== null ? ` · <span class="${diff > 0 ? 'up' : 'down'}">${diff > 0 ? '▲' : '▼'} ${Math.abs(Math.round(diff * 100))}%</span> vs last month` : ''}</div>`;
   const byCat = S.categories.map(c => ({ c, v: sum(ex.filter(e => e.cat === c.name)) })).concat([...new Set(ex.map(e => e.cat))].filter(n => !S.categories.some(c => c.name === n)).map(n => ({ c: cat(n), v: sum(ex.filter(e => e.cat === n)) }))).filter(o => o.v > 0).sort((a, b) => b.v - a.v);
   const { x, w, h } = canvasCtx($('#donut'));
   if (w > 20) {
@@ -416,12 +437,19 @@ function renderStats() {
     x.fillStyle = css('--text'); x.font = '700 18px system-ui'; x.textAlign = 'center'; x.textBaseline = 'middle'; x.fillText(short(tot), cx, cy);
   }
   $('#legend').innerHTML = byCat.map(o => `<span><span class="dot" style="background:${o.c.color}"></span>${o.c.icon} ${esc(o.c.name)}</span><span class="muted">${Math.round(o.v / tot * 100)}%</span><b>${money(o.v)}</b>`).join('') || '<span class="muted">No data</span>';
-  const ms = [...Array(6)].map((_, i) => shiftMonth(month, i - 5)), vals = ms.map(m => sum(inMonth(m))), mx = Math.max(...vals, 1);
+  const ms = [...Array(6)].map((_, i) => shiftMonth(month, i - 5)), vals = ms.map(m => sum(inMonth(m)) - sum(incMonth(m).filter(isRefund))), ivals = ms.map(m => sum(incMonth(m).filter(e => !isRefund(e)))), mx = Math.max(...vals, ...ivals, 1), hasInc = ivals.some(v => v);
   const B = canvasCtx($('#bars'));
   if (B.w > 20) {
     const bw = B.w / 6, top = 18, bot = 20, ch = B.h - top - bot;
-    vals.forEach((v, i) => { const bh = v / mx * ch, bx = i * bw + bw * .2; B.x.fillStyle = i === 5 ? css('--accent') : css('--line'); B.x.beginPath(); B.x.roundRect ? B.x.roundRect(bx, top + ch - bh, bw * .6, bh, [4, 4, 0, 0]) : B.x.rect(bx, top + ch - bh, bw * .6, bh); B.x.fill(); B.x.fillStyle = css('--muted'); B.x.font = '11px system-ui'; B.x.textAlign = 'center'; B.x.fillText(monthLabel(ms[i], true), i * bw + bw / 2, B.h - 6); if (v) { B.x.fillStyle = css('--text'); B.x.fillText(short(v), i * bw + bw / 2, top + ch - bh - 5); } });
+    const bar = (x0, w0, v, col) => { const bh = Math.max(0, v) / mx * ch; B.x.fillStyle = col; B.x.beginPath(); B.x.roundRect ? B.x.roundRect(x0, top + ch - bh, w0, bh, [3, 3, 0, 0]) : B.x.rect(x0, top + ch - bh, w0, bh); B.x.fill(); return bh; };
+    vals.forEach((v, i) => {
+      const cx0 = i * bw;
+      if (hasInc) { const w0 = bw * .32; bar(cx0 + bw * .16, w0, ivals[i], css('--good')); const bh = bar(cx0 + bw * .52, w0, v, i === 5 ? css('--accent') : css('--muted')); }
+      else { const bh = bar(cx0 + bw * .2, bw * .6, v, i === 5 ? css('--accent') : css('--line')); if (v > 0) { B.x.fillStyle = css('--text'); B.x.font = '11px system-ui'; B.x.textAlign = 'center'; B.x.fillText(short(v), cx0 + bw / 2, top + ch - bh - 5); } }
+      B.x.fillStyle = css('--muted'); B.x.font = '11px system-ui'; B.x.textAlign = 'center'; B.x.fillText(monthLabel(ms[i], true), cx0 + bw / 2, B.h - 6);
+    });
   }
+  $('#barsKey').innerHTML = hasInc ? '<span><span class="dot" style="background:var(--good)"></span>Income</span><span><span class="dot" style="background:var(--accent)"></span>Spent</span>' : '';
   renderBudgets(ex);
   const grp = key => { const t = {}; ex.forEach(e => t[e[key]] = (t[e[key]] || 0) + e.amount); const k = Object.keys(t).sort((a, b) => t[b] - t[a]); return k.length ? k.map(n => `<div style="margin:6px 0"><div class="row"><span>${esc(n)}</span><b style="text-align:right">${money(t[n])}</b></div><div class="bar"><i style="width:${t[n] / tot * 100}%;background:var(--accent)"></i></div></div>`).join('') : '<div class="muted">No data</div>'; };
   $('#byPerson').innerHTML = grp('person'); $('#byMode').innerHTML = grp('mode');
@@ -444,9 +472,10 @@ function renderSettings() {
   if ($('#v-settings').contains(document.activeElement) && document.activeElement.tagName === 'INPUT') return;
   renderAccount();
   $('#peopleList').innerHTML = S.people.map((p, i) => `<span class="pill">${esc(p)}${S.people.length > 1 ? `<button data-rp="${i}" aria-label="Remove">×</button>` : ''}</span>`).join('');
-  $('#catEdit').innerHTML = S.categories.map((c, i) => `<div class="catrow" data-i="${i}"><input class="e" value="${esc(c.icon)}" data-k="icon" maxlength="4"><input value="${esc(c.name)}" data-k="name" maxlength="24"><input type="color" value="${c.color}" data-k="color"><button class="small" data-del="${i}">✕</button></div>`).join('');
+  $('#incEdit').innerHTML = S.incCats.map((c, i) => `<div class="catrow" data-l="incCats" data-i="${i}"><input class="e" value="${esc(c.icon)}" data-k="icon" maxlength="4"><input value="${esc(c.name)}" data-k="name" maxlength="24"><input type="color" value="${c.color}" data-k="color"><button class="small" data-del="${i}">✕</button></div>`).join('');
+  $('#catEdit').innerHTML = S.categories.map((c, i) => `<div class="catrow" data-l="categories" data-i="${i}"><input class="e" value="${esc(c.icon)}" data-k="icon" maxlength="4"><input value="${esc(c.name)}" data-k="name" maxlength="24"><input type="color" value="${c.color}" data-k="color"><button class="small" data-del="${i}">✕</button></div>`).join('');
   $('#ruleList').innerHTML = S.rules.length ? S.rules.map((r, i) => { const c = cat(r.cat); return `<div class="rule"><span>“${esc(r.k)}”</span><span>→ ${c.icon} ${esc(c.name)}</span><button class="small" data-rr="${i}" aria-label="Delete rule">✕</button></div>`; }).join('') : '<div class="muted">No rules yet.</div>';
-  $('#ruleCat').innerHTML = S.categories.map(c => `<option value="${esc(c.name)}">${c.icon} ${esc(c.name)}</option>`).join('');
+  $('#ruleCat').innerHTML = '<optgroup label="Spending">' + S.categories.map(c => `<option value="${esc(c.name)}">${c.icon} ${esc(c.name)}</option>`).join('') + '</optgroup><optgroup label="Income">' + S.incCats.map(c => `<option value="${esc(c.name)}">${c.icon} ${esc(c.name)}</option>`).join('') + '</optgroup>';
 }
 function renderAccount() {
   const el = $('#account');
@@ -479,25 +508,28 @@ $('#account').onclick = async ev => {
 $('#account').onchange = ev => { if (ev.target.id === 'myName') { const v = ev.target.value.trim(); if (v) { S.name = v; ev.target.blur(); saveMeta(); toast('Name saved'); } } };
 $('#addPerson').onclick = () => { const n = $('#newPerson').value.trim(); if (!n) return; if (S.people.some(p => p.toLowerCase() === n.toLowerCase())) return toast('Already added'); S.people.push(n); $('#newPerson').value = ''; saveMeta(); };
 $('#peopleList').onclick = e => { const b = e.target.closest('[data-rp]'); if (!b) return; const p = S.people[+b.dataset.rp]; if (!confirm(`Remove ${p}? Their past expenses stay.`)) return; S.people.splice(+b.dataset.rp, 1); if (S.lastPerson === p) S.lastPerson = S.people[0]; saveMeta(); };
-$('#catEdit').onchange = e => {
+const catEditChange = e => {
   const row = e.target.closest('.catrow'), k = e.target.dataset.k; if (!row || !k) return;
-  const c = S.categories[+row.dataset.i], v = e.target.value.trim(); e.target.blur();
+  const L = S[row.dataset.l], c = L[+row.dataset.i], v = e.target.value.trim(); e.target.blur();
   if (k === 'name') {
-    if (!v || S.categories.some(o => o !== c && o.name.toLowerCase() === v.toLowerCase())) { toast('Name empty or already used'); schedule(); return; }
-    const old = c.name; c.name = v; S.rules.forEach(r => { if (r.cat === old) r.cat = v; }); if (selCat === old) selCat = v;
+    if (!v || [...S.categories, ...S.incCats].some(o => o !== c && o.name.toLowerCase() === v.toLowerCase())) { toast('Name empty or already used'); schedule(); return; }
+    const old = c.name; c.name = v; S.rules.forEach(r => { if (r.cat === old) r.cat = v; }); if (selCat === old) selCat = v; if (selInc === old) selInc = v;
     const moved = allExp().filter(x => x.cat === old).map(x => ({ ...x, cat: v })); if (moved.length) putMany(moved);
   } else c[k] = v || c[k];
   saveMeta();
 };
-$('#catEdit').onclick = e => { const b = e.target.closest('[data-del]'); if (!b) return; const c = S.categories[+b.dataset.del]; const n = allExp().filter(x => x.cat === c.name).length; if (n) return toast(`Used by ${n} expense${n > 1 ? 's' : ''} — rename it instead`); if (S.categories.length <= 1) return; S.categories.splice(+b.dataset.del, 1); S.rules = S.rules.filter(r => r.cat !== c.name); saveMeta(); };
+$('#catEdit').onchange = catEditChange; $('#incEdit').onchange = catEditChange;
+$('#catEdit').onclick = $('#incEdit').onclick = e => { const b = e.target.closest('[data-del]'); if (!b) return; const L = S[b.closest('.catrow').dataset.l]; const c = L[+b.dataset.del]; const n = allExp().filter(x => x.cat === c.name).length; if (n) return toast(`Used by ${n} entr${n > 1 ? 'ies' : 'y'} — rename it instead`); if (L.length <= 1) return; L.splice(+b.dataset.del, 1); S.rules = S.rules.filter(r => r.cat !== c.name); saveMeta(); };
+$('#addInc').onclick = () => { let n = 'New income', i = 2; while (cat(n).icon !== '🏷️') n = 'New income ' + i++; S.incCats.push({ name: n, icon: '💰', color: '#7cb342' }); saveMeta(); render(); const ins = $$('#incEdit input[data-k=name]'); ins[ins.length - 1].focus(); ins[ins.length - 1].select(); };
 $('#addCat').onclick = () => { let n = 'New category', i = 2; while (S.categories.some(c => c.name === n)) n = 'New category ' + i++; S.categories.push({ name: n, icon: '🏷️', color: '#' + Math.floor(Math.random() * 0xffffff).toString(16).padStart(6, '0'), budget: 0 }); saveMeta(); render(); const ins = $$('#catEdit input[data-k=name]'); ins[ins.length - 1].focus(); ins[ins.length - 1].select(); };
 $('#wipe').onclick = () => { if (!S.expenses.length) return toast('Nothing to delete'); if (!confirm(`Delete all ${S.expenses.length} personal expenses${cloud ? ' from your account' : ' on this phone'}? Trips are kept. Save a backup first!`)) return; if (prompt('Type DELETE to confirm') !== 'DELETE') return; putMany([...S.expenses], true); toast('Personal expenses deleted'); };
 
 // ---------- category rules & quick change ----------
 const keyOf = n => String(n || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\b\d+\b/g, ' ').replace(/\s+/g, ' ').trim();
-function ruleFor(text) { const t = keyOf(text); if (!t) return null; const r = [...S.rules].sort((a, b) => b.k.length - a.k.length).find(r => r.k && t.includes(r.k) && S.categories.some(c => c.name === r.cat)); return r ? r.cat : null; }
+function ruleFor(text, type) { const t = keyOf(text); if (!t) return null; const L = type === 'in' ? S.incCats : S.categories; const r = [...S.rules].sort((a, b) => b.k.length - a.k.length).find(r => r.k && t.includes(r.k) && L.some(c => c.name === r.cat)); return r ? r.cat : null; }
 function setRule(k, n) { k = keyOf(k); if (k.length < 2) return; const r = S.rules.find(r => r.k === k); if (r) r.cat = n; else S.rules.push({ k, cat: n }); }
 function guessCat(text) { const r = ruleFor(text); if (r) return r; const t = String(text).toLowerCase(); for (const [n, re] of KEYWORDS) if (re.test(t) && S.categories.some(c => c.name === n)) return n; return S.categories.some(c => c.name === 'Other') ? 'Other' : S.categories[0].name; }
+function guessInc(text) { const r = ruleFor(text, 'in'); if (r) return r; const t = String(text).toLowerCase(); for (const [n, re] of INC_KEYWORDS) if (re.test(t) && S.incCats.some(c => c.name === n)) return n; return S.incCats.some(c => c.name === 'Other income') ? 'Other income' : S.incCats[0].name; }
 function guessMode(t) { t = String(t).toUpperCase(); if (/^UPI|\bUPI\b/.test(t)) return 'UPI'; if (/^POS|\bPOS\b|CARD|^ME DC|^VPS|^IPS/.test(t)) return 'Card'; if (/^ATW|^NWD|^EAW|ATM|CASH/.test(t)) return 'Cash'; return 'Bank'; }
 function cleanNarration(n) { const p = n.split('-'); if (/^UPI/i.test(n) && p.length > 1 && p[1].trim()) return p[1].trim().slice(0, 60); return n.replace(/^(POS|ME DC|VPS|IPS)\s+[\dX*]+\s+/i, '').replace(/\s+/g, ' ').trim().slice(0, 60); }
 
@@ -508,7 +540,7 @@ $('#sheetBg').onclick = e => { if (e.target.id === 'sheetBg') closeSheet(); };
 $('#sheet').onclick = e => { if (sheetHandler) sheetHandler(e); };
 function openCatSheet(id, t) {
   const e = findExp(id, t); if (!e) return;
-  openSheet(`<h3>Change category</h3><div class="muted" style="margin-bottom:12px">${esc(e.note || e.cat)} · ${money(e.amount)}</div><div class="chips">${S.categories.map(c => `<button class="chip ${c.name === e.cat ? 'sel' : ''}" data-pick="${esc(c.name)}">${c.icon} ${esc(c.name)}</button>`).join('')}</div>`, ev => {
+  openSheet(`<h3>Change category</h3><div class="muted" style="margin-bottom:12px">${esc(e.note || e.cat)} · ${money(e.amount)}</div><div class="chips">${(isInc(e) ? S.incCats : S.categories).map(c => `<button class="chip ${c.name === e.cat ? 'sel' : ''}" data-pick="${esc(c.name)}">${c.icon} ${esc(c.name)}</button>`).join('')}</div>`, ev => {
     const b = ev.target.closest('[data-pick]'); if (!b) return; if (b.dataset.pick === e.cat) return closeSheet();
     const ne = { ...e, cat: b.dataset.pick }; putExp(ne); offerRemember(ne);
   });
@@ -516,7 +548,7 @@ function openCatSheet(id, t) {
 function offerRemember(e) {
   const k = keyOf(e.note), c = cat(e.cat);
   if (k.length < 2) { closeSheet(); toast(`Moved to ${c.name}`); return; }
-  const similar = allExp().filter(x => x.id !== e.id && x.cat !== e.cat && keyOf(x.note) === k);
+  const similar = allExp().filter(x => x.id !== e.id && x.cat !== e.cat && isInc(x) === isInc(e) && keyOf(x.note) === k);
   openSheet(`<h3>Moved to ${c.icon} ${esc(c.name)}</h3><p class="muted">Do the same for “${esc(e.note)}” from now on?${similar.length ? ` There ${similar.length > 1 ? 'are' : 'is'} also ${similar.length} other expense${similar.length > 1 ? 's' : ''} with this name.` : ''}</p>
     <button class="primary" data-a="all">${similar.length ? `Move ${similar.length} more & remember` : 'Remember for future'}</button><button style="width:100%;margin-top:8px" data-a="one">Just this one</button>`, ev => {
     const a = ev.target.closest('[data-a]'); if (!a) return;
@@ -526,7 +558,7 @@ function offerRemember(e) {
 }
 $('#addRule').onclick = () => {
   const k = keyOf($('#ruleKey').value), n = $('#ruleCat').value; if (k.length < 2) return toast('Enter a word (2+ letters)');
-  setRule(k, n); const m = allExp().filter(x => keyOf(x.note).includes(k) && x.cat !== n);
+  setRule(k, n); const wantInc = S.incCats.some(c => c.name === n); const m = allExp().filter(x => keyOf(x.note).includes(k) && x.cat !== n && isInc(x) === wantInc);
   if (m.length && confirm(`Also move ${m.length} existing expense${m.length > 1 ? 's' : ''} matching “${k}”?`)) putMany(m.map(x => ({ ...x, cat: n })));
   $('#ruleKey').value = ''; saveMeta(); toast('Rule added');
 };
@@ -541,7 +573,7 @@ async function deliver(name, text, type) {
 const csvCell = v => { v = String(v ?? ''); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
 function exportCSV(list, base) {
   if (!list.length) return toast('Nothing to download yet');
-  const rows = [['Date', 'Amount', 'Category', 'Mode', 'PaidBy', 'Note', 'Trip', 'Id'], ...[...list].sort((a, b) => a.date.localeCompare(b.date)).map(e => [e.date, e.amount, e.cat, e.mode, e.person, e.note, e.trip ? (trip(e.trip) || {}).name || '' : '', e.id])];
+  const rows = [['Date', 'Type', 'Amount', 'Category', 'Mode', 'PaidBy', 'Note', 'Trip', 'Id'], ...[...list].sort((a, b) => a.date.localeCompare(b.date)).map(e => [e.date, isInc(e) ? 'Income' : 'Expense', e.amount, e.cat, e.mode, e.person, e.note, e.trip ? (trip(e.trip) || {}).name || '' : '', e.id])];
   deliver(`${base}-${today()}.csv`, '﻿' + rows.map(r => r.map(csvCell).join(',')).join('\r\n'), 'text/csv');
 }
 $('#dlCsv').onclick = () => exportCSV(S.expenses.concat(...Object.entries(TE).map(([id, l]) => l.map(e => ({ ...e, trip: id })))), 'trickle');
@@ -587,22 +619,23 @@ function rowsToExpenses(rows) {
   const hi = rows.findIndex(r => { const h = low(r); return h.some(c => /date/.test(c)) && h.some(c => /withdrawal|debit|^amount/.test(c)); });
   if (hi < 0) throw new Error('no header row with Date and Withdrawal/Debit/Amount columns');
   const H = low(rows[hi]), col = re => H.findIndex(h => re.test(h)), now = Date.now(), list = [];
-  const wcol = col(/withdrawal|debit/);
+  const wcol = col(/withdrawal|debit/), dcol = col(/deposit|credit/);
   if (wcol >= 0) {
     let cd = H.findIndex(h => /date/.test(h) && !/value/.test(h)); if (cd < 0) cd = col(/date/);
     const cn = col(/narration|description|particular|remark|detail|transaction/), cr = col(/ref|chq|cheque/);
     rows.slice(hi + 1).forEach((r, i) => {
-      const d = parseDate(r[cd]), amt = num(r[wcol]); if (!d || !(amt > 0)) return;
+      const d = parseDate(r[cd]), amt = num(r[wcol]), dep = dcol >= 0 ? num(r[dcol]) : 0; if (!d) return;
       const n = String(cn >= 0 ? r[cn] ?? '' : '').trim();
+      if (!(amt > 0)) { if (dep > 0) list.push({ id: 'i' + hash(d + '|' + dep + '|' + n + '|' + (cr >= 0 ? r[cr] : '')), ts: now - i, type: 'in', date: d, amount: r2(dep), cat: guessInc(n), mode: guessMode(n), person: '', note: cleanNarration(n), raw: n }); return; }
       list.push({ id: 'b' + hash(d + '|' + amt + '|' + n + '|' + (cr >= 0 ? r[cr] : '')), ts: now - i, date: d, amount: r2(amt), cat: guessCat(n), mode: guessMode(n), person: '', note: cleanNarration(n), raw: n });
     });
     return { kind: 'bank', list };
   }
-  const cd = col(/^date$/), ca = col(/^amount/), cc = col(/categ/), cm = col(/mode/), cp = col(/paid ?by|person/), cn = col(/note|desc/), ct = col(/^trip$/), ci = col(/^id$/);
+  const cty = col(/^type$/), cd = col(/^date$/), ca = col(/^amount/), cc = col(/categ/), cm = col(/mode/), cp = col(/paid ?by|person/), cn = col(/note|desc/), ct = col(/^trip$/), ci = col(/^id$/);
   rows.slice(hi + 1).forEach((r, i) => {
     const d = parseDate(r[cd]), amt = num(r[ca]); if (!d || !(amt > 0)) return;
-    const note = cn >= 0 ? String(r[cn] || '') : '';
-    list.push({ id: (ci >= 0 && r[ci]) || 'c' + hash(d + '|' + amt + '|' + note), ts: now - i, date: d, amount: r2(amt), cat: cc >= 0 && r[cc] ? catName(r[cc]) : guessCat(note), mode: MODES.includes(r[cm]) ? r[cm] : 'UPI', person: cp >= 0 ? String(r[cp] || '') : '', note, tripName: ct >= 0 ? String(r[ct] || '').trim() : '' });
+    const note = cn >= 0 ? String(r[cn] || '') : '', inc = cty >= 0 && /^in/i.test(r[cty] || '');
+    list.push({ id: (ci >= 0 && r[ci]) || 'c' + hash(d + '|' + amt + '|' + note), ts: now - i, ...(inc ? { type: 'in' } : {}), date: d, amount: r2(amt), cat: cc >= 0 && r[cc] ? catName(r[cc]) : inc ? guessInc(note) : guessCat(note), mode: MODES.includes(r[cm]) ? r[cm] : 'UPI', person: cp >= 0 ? String(r[cp] || '') : '', note, tripName: ct >= 0 ? String(r[ct] || '').trim() : '' });
   });
   return { kind: 'csv', list };
 }
@@ -610,18 +643,21 @@ let PV = null;
 function destOf(e, target) { if (target) return target; if (e.tripName) { const t = tripByName(e.tripName); return t ? t.id : 'new:' + e.tripName; } return ''; }
 function showPreview(res, target) {
   const t = target && trip(target);
+  if (target) res.list = res.list.filter(e => !isInc(e));
+  if (!res.list.length) return toast('No spends found for this trip', 3500);
   const existing = {}; const seen = dest => existing[dest] || (existing[dest] = { ids: new Set((dest && !dest.startsWith('new:') ? tripExp(dest) : dest ? [] : S.expenses).map(x => x.id)), sigs: new Set((dest && !dest.startsWith('new:') ? tripExp(dest) : dest ? [] : S.expenses).map(sig)) });
   const rows = res.list.sort((a, b) => b.date.localeCompare(a.date)).map(e => {
     const dest = destOf(e, target), ex = seen(dest), dup = ex.ids.has(e.id) || ex.sigs.has(sig(e));
-    const xfer = res.kind === 'bank' && TRANSFER_RE.test(e.raw || e.note), out = t && t.start && (e.date < t.start || e.date > (t.end || t.start));
-    return { e, dest, dup, on: !dup && !xfer && !out, why: dup ? 'Already added' : xfer ? 'Looks like a transfer or investment' : out ? 'Outside trip dates' : '' };
+    const xfer = res.kind === 'bank' && (isInc(e) ? OWN_IN_RE : TRANSFER_RE).test(e.raw || e.note), out = t && t.start && (e.date < t.start || e.date > (t.end || t.start));
+    return { e, dest, dup, on: !dup && !xfer && !out, why: dup ? 'Already added' : xfer ? (isInc(e) ? 'Looks like money from your own account' : 'Looks like a transfer or investment') : out ? 'Outside trip dates' : '' };
   });
   const people = peopleFor(target);
   PV = { kind: res.kind, target, rows, person: target ? (people.includes(meIn(t)) ? meIn(t) : people[0]) : (people.includes(S.lastPerson) ? S.lastPerson : people[0]) };
-  openSheet(`<h3>${rows.length} spend${rows.length > 1 ? 's' : ''} found</h3>
+  const nIn = rows.filter(x => isInc(x.e)).length, nOut = rows.length - nIn;
+  openSheet(`<h3>${nOut ? nOut + ' spend' + (nOut > 1 ? 's' : '') : ''}${nOut && nIn ? ' and ' : ''}${nIn ? nIn + ' income' : ''} found</h3>
     <div class="muted">Adding to <b>${t ? '✈ ' + esc(t.name) : res.kind === 'csv' && rows.some(r => r.dest) ? 'personal expenses and trips in the file' : 'personal expenses'}</b>. Untick anything that isn't a real expense.</div>
-    ${res.kind === 'bank' ? `<label>Paid by<select id="pvPerson">${opts(people, PV.person)}</select></label>` : ''}
-    <div class="pv">${rows.map((x, i) => { const c = cat(x.e.cat); return `<label class="pvrow ${x.on ? '' : 'off'}"><input type="checkbox" data-i="${i}" ${x.on ? 'checked' : ''} ${x.dup ? 'disabled' : ''}><span class="ic" style="background:${c.color}22;width:30px;height:30px;font-size:15px">${c.icon}</span><span class="mid"><span class="t">${esc(x.e.note || c.name)}</span><span class="s">${niceDate(x.e.date)} · ${esc(c.name)}${x.e.tripName && !target ? ' · ✈ ' + esc(x.e.tripName) : ''}${x.why ? ` · <span class="why">${x.why}</span>` : ''}</span></span><span class="a">${money(x.e.amount)}</span></label>`; }).join('')}</div>
+    ${res.kind === 'bank' ? `<label>${nIn ? 'Paid / received by' : 'Paid by'}<select id="pvPerson">${opts(people, PV.person)}</select></label>` : ''}
+    <div class="pv">${rows.map((x, i) => { const c = cat(x.e.cat); return `<label class="pvrow ${x.on ? '' : 'off'}"><input type="checkbox" data-i="${i}" ${x.on ? 'checked' : ''} ${x.dup ? 'disabled' : ''}><span class="ic" style="background:${c.color}22;width:30px;height:30px;font-size:15px">${c.icon}</span><span class="mid"><span class="t">${esc(x.e.note || c.name)}</span><span class="s">${niceDate(x.e.date)} · ${esc(c.name)}${x.e.tripName && !target ? ' · ✈ ' + esc(x.e.tripName) : ''}${x.why ? ` · <span class="why">${x.why}</span>` : ''}</span></span><span class="a${isInc(x.e) ? ' inc' : ''}">${isInc(x.e) ? '+' : ''}${money(x.e.amount)}</span></label>`; }).join('')}</div>
     <button class="primary" id="pvGo"></button><button style="width:100%;margin-top:8px" id="pvCancel">Cancel</button>`, ev => {
     if (ev.target.id === 'pvCancel') { PV = null; return closeSheet(); }
     if (ev.target.id === 'pvGo') return doImport();
@@ -629,7 +665,7 @@ function showPreview(res, target) {
   $('#sheet').onchange = ev => { if (ev.target.id === 'pvPerson') PV.person = ev.target.value; const i = ev.target.dataset.i; if (i !== undefined) { PV.rows[+i].on = ev.target.checked; ev.target.closest('.pvrow').classList.toggle('off', !ev.target.checked); pvButton(); } };
   pvButton();
 }
-function pvButton() { const sel = PV.rows.filter(x => x.on); const b = $('#pvGo'); b.disabled = !sel.length; b.textContent = sel.length ? `Import ${sel.length} · ${money(sum(sel.map(x => x.e)))}` : 'Nothing selected'; }
+function pvButton() { const sel = PV.rows.filter(x => x.on), o = sum(sel.filter(x => !isInc(x.e)).map(x => x.e)), i = sum(sel.filter(x => isInc(x.e)).map(x => x.e)); const b = $('#pvGo'); b.disabled = !sel.length; b.textContent = sel.length ? `Import ${sel.length}${o ? ' · −' + money(o) : ''}${i ? ' · +' + money(i) : ''}` : 'Nothing selected'; }
 function doImport() {
   const sel = PV.rows.filter(x => x.on); if (!sel.length) return;
   let metaChanged = false; const newTrips = {}, out = [];
@@ -639,7 +675,7 @@ function doImport() {
     if (PV.kind === 'bank') e.person = PV.person;
     if (dest) { e.trip = dest; const t = newTrips[Object.keys(newTrips).find(k => newTrips[k].id === dest)] || trip(dest); if (!e.person) e.person = t.members[0] || myName(); if (t && !t.members.includes(e.person)) { t.members.push(e.person); t._dirty = true; } }
     else { delete e.trip; if (!e.person) e.person = S.lastPerson; if (!S.people.includes(e.person)) { S.people.push(e.person); metaChanged = true; } }
-    if (ensureCat(e.cat)) metaChanged = true;
+    if (isInc(e) ? ensureIncCat(e.cat) : ensureCat(e.cat)) metaChanged = true;
     out.push(e);
   });
   Object.values(newTrips).forEach(t => { const ds = out.filter(e => e.trip === t.id).map(e => e.date).sort(); t.start = ds[0] || ''; t.end = ds[ds.length - 1] || ''; if (!t.members.length) t.members = [myName()]; putTrip(t, true); });
@@ -656,6 +692,7 @@ function restoreBackup(raw) {
   const b = normalize(raw), tripN = b.trips.length, expN = b.expenses.length + Object.values(b.tripExp).reduce((n, l) => n + l.length, 0);
   if (!confirm(`Restore backup: ${expN} expenses and ${tripN} trips? Existing entries are kept and duplicates skipped.`)) return;
   b.categories.forEach(c => { if (!S.categories.some(x => x.name.toLowerCase() === c.name.toLowerCase())) S.categories.push(c); });
+  b.incCats.forEach(c => { if (!S.incCats.some(x => x.name.toLowerCase() === c.name.toLowerCase())) S.incCats.push(c); });
   b.rules.forEach(r => { if (!S.rules.some(x => x.k === r.k)) S.rules.push(r); });
   b.people.forEach(p => { if (!S.people.includes(p)) S.people.push(p); });
   saveMeta();
