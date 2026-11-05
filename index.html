@@ -104,6 +104,10 @@ canvas{width:100%;display:block}
 .fact-card{background:linear-gradient(135deg,var(--accent-soft),var(--card));}
 .fact-h{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
 .fact{font-size:15px;line-height:1.5}
+.legend.picking .lg{cursor:pointer}
+.legend .lg.dim{opacity:.35}
+.legend .lg.on{font-weight:700}
+.dhead{display:flex;justify-content:space-between;align-items:center;margin:14px 0 4px;padding-top:10px;border-top:1px solid var(--line)}
 .banner{background:var(--accent-soft);color:var(--text);border-radius:12px;padding:12px 14px;margin-bottom:12px;font-size:14px}
 .gbtn{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;margin-top:10px;font-weight:600}
 </style>
@@ -139,6 +143,7 @@ canvas{width:100%;display:block}
 </section>
 
 <section id="v-list">
+  <div class="seg pseg"><button type="button" data-p="month" class="on">Month</button><button type="button" data-p="year">Year</button></div>
   <div class="monthbar"><button data-m="-1">‹</button><strong class="mlabel"></strong><button data-m="1">›</button></div>
   <div class="filters"><select id="fType"><option value="">All</option><option value="out">Spending</option><option value="in">Income</option></select><select id="fPerson"></select><select id="fCat"></select></div>
   <input id="fSearch" placeholder="Search notes…" style="margin:0 0 6px">
@@ -150,13 +155,14 @@ canvas{width:100%;display:block}
 <section id="v-trips"><div id="tripsBox"></div></section>
 
 <section id="v-stats">
+  <div class="seg pseg"><button type="button" data-p="month" class="on">Month</button><button type="button" data-p="year">Year</button></div>
   <div class="monthbar"><button data-m="-1">‹</button><strong class="mlabel"></strong><button data-m="1">›</button></div>
   <div class="card" id="statTop"></div>
   <div class="card fact-card" id="factStats"></div>
-  <div class="card"><div class="label" style="margin-top:0">Spending by category</div><canvas id="donut" style="height:200px"></canvas><div class="legend" id="legend"></div></div>
-  <div class="card"><div class="label" style="margin-top:0">Income by source</div><canvas id="incDonut" style="height:200px"></canvas><div class="legend" id="incLegend"></div></div>
-  <div class="card"><div class="label" style="margin-top:0">Last 6 months</div><canvas id="bars" style="height:180px"></canvas><div class="keyrow" id="barsKey"></div></div>
-  <div class="card"><div class="label" style="margin-top:0">Monthly budgets</div><div id="budgetTotal"></div><div id="budgetList"></div><p class="muted" style="margin-bottom:0">Set a limit per category (0 = none). You're warned at 80%.</p></div>
+  <div class="card"><div class="label" style="margin-top:0">Spending by category</div><canvas id="donut" style="height:210px;cursor:pointer"></canvas><div class="legend" id="legend"></div><div id="outDetail"></div></div>
+  <div class="card"><div class="label" style="margin-top:0">Income by source</div><canvas id="incDonut" style="height:210px;cursor:pointer"></canvas><div class="legend" id="incLegend"></div><div id="inDetail"></div></div>
+  <div class="card"><div class="label" style="margin-top:0" id="barsTitle">Last 6 months</div><canvas id="bars" style="height:180px"></canvas><div class="keyrow" id="barsKey"></div></div>
+  <div class="card"><div class="label" style="margin-top:0" id="budgetTitle">Monthly budgets</div><div id="budgetTotal"></div><div id="budgetList"></div><p class="muted" style="margin-bottom:0">Set a limit per category (0 = none). You're warned at 80%.</p></div>
   <div class="card"><div class="label" style="margin-top:0">By person</div><div id="byPerson"></div><div class="label">By payment mode</div><div id="byMode"></div></div>
 </section>
 
