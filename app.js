@@ -267,6 +267,7 @@ function renderAdd() {
   $('#modeChips').innerHTML = MODES.map(m => `<button type="button" class="chip ${m === selMode ? 'sel' : ''}" data-mode="${m}">${m}</button>`).join('');
   fillPerson();
   if (!$('#date').value) $('#date').value = today();
+  renderFact($('#factAdd'), factMonth());
   const r = allExp().sort((a, b) => b.ts - a.ts).slice(0, 6);
   $('#recent').innerHTML = r.length ? r.map(e => itemHTML(e, true)).join('') : '<div class="empty">Nothing yet. Upload a statement or add an expense.</div>';
 }
@@ -442,11 +443,56 @@ function renderStats() {
       B.x.fillStyle = css('--muted'); B.x.font = '11px system-ui'; B.x.textAlign = 'center'; B.x.fillText(monthLabel(ms[i], true), cx0 + bw / 2, B.h - 6);
     });
   }
+  renderFact($('#factStats'), month);
   $('#barsKey').innerHTML = hasInc ? '<span><span class="dot" style="background:var(--good)"></span>Income</span><span><span class="dot" style="background:var(--accent)"></span>Spent</span>' : '';
   renderBudgets(ex);
   const grp = key => { const t = {}; ex.forEach(e => t[e[key]] = (t[e[key]] || 0) + e.amount); const k = Object.keys(t).sort((a, b) => t[b] - t[a]); return k.length ? k.map(n => `<div style="margin:6px 0"><div class="row"><span>${esc(n)}</span><b style="text-align:right">${money(t[n])}</b></div><div class="bar"><i style="width:${t[n] / tot * 100}%;background:var(--accent)"></i></div></div>`).join('') : '<div class="muted">No data</div>'; };
   $('#byPerson').innerHTML = grp('person'); $('#byMode').innerHTML = grp('mode');
 }
+// ---------- fun facts ----------
+let factIdx = Math.floor(Math.random() * 50);
+const nice = n => esc(String(n || '').toLowerCase().replace(/\b\w/g, c => c.toUpperCase()));
+function funFacts(m) {
+  const ex = inMonth(m), tot = sum(ex), F = [];
+  if (ex.length < 3) return F;
+  const prev = sum(inMonth(shiftMonth(m, -1)));
+  const [y, mo] = m.split('-').map(Number), days = m === mk(today()) ? new Date().getDate() : new Date(y, mo, 0).getDate(), daily = tot / days;
+  const food = ex.filter(e => /swiggy|zomato/i.test(e.note));
+  if (food.length >= 2) F.push(`🛵 You ordered from Swiggy/Zomato <b>${food.length} times</b> (${money(sum(food))}). Your delivery partner may know your address better than your relatives! Cook just twice a week and save about <b>${money(Math.round(sum(food) * .4))}</b> a month.`);
+  const chai = Math.round(tot / 15);
+  F.push(`☕ This month's spending = <b>${chai.toLocaleString('en-IN')} cups</b> of ₹15 chai. That's one chai a day for <b>${(chai / 365).toFixed(1)} years</b>! Skipping one "small treat" a day adds up fast.`);
+  const big = ex.reduce((a, b) => b.amount > a.amount ? b : a);
+  F.push(`💸 Biggest splurge: <b>${money(big.amount)}</b> on ${nice(big.note || big.cat)}. Hope it sparked joy ✨ Next time, try the 24-hour rule — if you still want it tomorrow, go ahead.`);
+  const small = ex.filter(e => e.amount < 200);
+  if (small.length >= 5) F.push(`💧 <b>${small.length} tiny spends</b> under ₹200 added up to <b>${money(sum(small))}</b>. That's exactly how money trickles away — drop by drop. Try a daily limit for small stuff!`);
+  F.push(`😴 You spend about <b>${money(Math.round(daily))} a day</b> — even on days you stayed home in pyjamas. Your wallet works night shifts! One no-spend day a week saves ~<b>${money(Math.round(daily * 4))}</b> a month.`);
+  const isWk = e => { const d = new Date(e.date + 'T00:00').getDay(); return d === 0 || d === 6; };
+  const wk = ex.filter(isWk), wkAvg = sum(wk) / (days * 2 / 7), wdAvg = sum(ex.filter(e => !isWk(e))) / (days * 5 / 7);
+  if (wk.length && wdAvg && wkAvg > wdAvg * 1.3) F.push(`🎉 Weekend-you spends <b>${Math.round((wkAvg / wdAvg - 1) * 100)}% more</b> per day than weekday-you. Saturday-you buys, Monday-you pays! Plan one free weekend outing — beach, park or a long walk.`);
+  if (prev && tot > prev * 1.1) F.push(`🚰 Spending is <b>up ${Math.round((tot / prev - 1) * 100)}%</b> from last month. Your money is trickling faster than usual — time to tighten the tap!`);
+  if (prev && tot < prev * .9) F.push(`🏆 Spending is <b>down ${Math.round((1 - tot / prev) * 100)}%</b> from last month — your wallet is doing a happy dance! Move the ${money(prev - tot)} you saved into savings before it escapes.`);
+  const cnt = {}; ex.forEach(e => { const k = keyOf(e.note); if (k.length > 2) { cnt[k] = cnt[k] || { n: 0, v: 0, name: e.note }; cnt[k].n++; cnt[k].v += e.amount; } });
+  const top = Object.values(cnt).sort((a, b) => b.n - a.n)[0];
+  if (top && top.n >= 3) F.push(`📍 ${nice(top.name)} is your most visited place: <b>${top.n} times</b>, ${money(top.v)}. At this point, ask them for a loyalty discount 😄`);
+  const byC = {}; ex.forEach(e => byC[e.cat] = (byC[e.cat] || 0) + e.amount); const tc = Object.keys(byC).sort((a, b) => byC[b] - byC[a])[0];
+  F.push(`✂️ ${cat(tc).icon} ${esc(tc)} is your biggest category (${money(byC[tc])}). Cutting it by just 10% saves <b>${money(Math.round(byC[tc] * .1 * 12))} a year</b> — a weekend getaway, for free!`);
+  const upi = ex.filter(e => e.mode === 'UPI');
+  if (upi.length / ex.length > .6) F.push(`📱 <b>${Math.round(upi.length / ex.length * 100)}%</b> of your spends were UPI. Scan, pay, forget — the holy trinity! Check your UPI history weekly so "just ₹50" doesn't quietly become ₹5,000.`);
+  const fuel = ex.filter(e => /petrol|fuel|hpcl|bpcl|iocl|indian oil|shell/i.test(e.note));
+  if (fuel.length) F.push(`⛽ Your vehicle ate <b>${money(sum(fuel))}</b> of fuel this month — it's eating better than some of us! Gentle acceleration and correct tyre pressure stretch every litre.`);
+  const incs = incMonth(m), income = sum(incs.filter(e => !isRefund(e))), net = tot - sum(incs.filter(isRefund));
+  if (income > 0) { const sv = income - net; if (sv > 0) F.push(`🏦 You saved <b>${money(sv)}</b> this month. Keep it up and that's <b>${money(sv * 12)}</b> in a year — ${Math.max(1, Math.floor(sv * 12 / 25000))} Goa trip${sv * 12 >= 50000 ? 's' : ''}' worth (but invest most of it 😉).`); else F.push(`🚨 You spent <b>${money(-sv)} more</b> than you earned. Your wallet has filed a complaint! Try the 50-30-20 rule: 50% needs, 30% wants, 20% savings.`); }
+  return F;
+}
+// Home screen uses the latest month that has spending (e.g. last month's statement).
+const factMonth = () => mk(S.expenses.filter(e => !isInc(e)).map(e => e.date).sort().pop() || today());
+function renderFact(el, m) {
+  const F = funFacts(m);
+  if (!F.length) { el.innerHTML = '<div class="fact-h"><b>😄 Fun fact</b></div><div class="muted">Upload a statement or add a few expenses and I\'ll roast your spending (nicely).</div>'; return; }
+  el.innerHTML = `<div class="fact-h"><b>😄 Fun fact</b><button class="link" data-fact="1">Another ↻</button></div><div class="fact">${F[factIdx % F.length]}</div>`;
+}
+document.addEventListener('click', e => { if (e.target.closest('[data-fact]')) { factIdx++; renderFact(e.target.closest('.card'), view === 'stats' ? month : factMonth()); } });
+
 function donut(cv, legend, ex, list) {
   const tot = sum(ex);
   const byCat = list.map(c => ({ c, v: sum(ex.filter(e => e.cat === c.name)) })).concat([...new Set(ex.map(e => e.cat))].filter(n => !list.some(c => c.name === n)).map(n => ({ c: cat(n), v: sum(ex.filter(e => e.cat === n)) }))).filter(o => o.v > 0).sort((a, b) => b.v - a.v);
