@@ -1,4 +1,4 @@
-const CACHE='trickle-v11';
+const CACHE='trickle-v12';
 const FILES=['./','./index.html','./app.js','./firebase-config.js','./manifest.json','./icon.svg','./icon-192.png','./icon-512.png'];
 self.addEventListener('install',e=>{e.waitUntil(caches.open(CACHE).then(c=>Promise.all(FILES.map(f=>c.add(f).catch(()=>{})))));self.skipWaiting();});
 self.addEventListener('activate',e=>{e.waitUntil(caches.keys().then(ks=>Promise.all(ks.filter(k=>k!==CACHE).map(k=>caches.delete(k)))));self.clients.claim();});
