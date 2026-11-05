@@ -11,6 +11,9 @@ const DEFAULT_INC = [['Salary','💼','#2e7d32'],['Interest','🏦','#00897b'],[
 const INC_KEYWORDS = [['Salary',/salary|\bsal\b|payroll|wages/],['Interest',/int\.? ?pd|interest|int\.? ?coll/],['Refund',/refund|reversal|\brev\b|rfnd/],['Cashback',/cashback|cash back|reward/]];
 const OWN_IN_RE = /self transfer|own account|sweep|fd clos|fd prem|redemption|mutual fund|zerodha|groww|upstox|kuvera|indmoney/i;
 const INVEST_RE = /invest|\bsip\b|mutual ?fund|\bmf\b|stocks?\b|equity|zerodha|groww|upstox|kuvera|indmoney|paytm money|\bnps\b|\bppf\b|\bfd\b|\brd\b|fixed deposit|recurring deposit|\bsgb\b/i;
+const INSTR = [['Mutual funds / SIP','🪙','#00897b',/\bsip\b|mutual ?fund|\bmf\b|kuvera|paytm money|coin by/i],['Stocks','📊','#3949ab',/zerodha|groww|upstox|indmoney|angel|stocks?\b|equity|shares?\b/i],['FD / RD','🏦','#8d6e63',/\bfd\b|\brd\b|fixed deposit|recurring deposit/i],['PPF / NPS','🛡️','#8e24aa',/\bppf\b|\bnps\b/i],['Gold bonds','🥇','#f9a825',/\bsgb\b|gold bond/i]].map(([name, icon, color, re]) => ({ name, icon, color, re }));
+const INSTR_OTHER = { name: 'Other investments', icon: '📈', color: '#26a69a' };
+const instrOf = e => (INSTR.find(i => i.re.test(e.note) || i.re.test(e.cat)) || INSTR_OTHER).name;
 const TRANSFER_RE = /credit ?card|cc ?(bill|pay)|^cc\s|\bcc\b.*autopay|si-tad|cred club|\bcred\b|card ?payment|self transfer|own account/i;
 
 const $ = s => document.querySelector(s), $$ = s => [...document.querySelectorAll(s)];
@@ -72,7 +75,7 @@ const metaOf = o => ({ categories: o.categories, incCats: o.incCats, people: o.p
 function saveLocal() { if (cloud) return; try { localStorage.setItem(LKEY, JSON.stringify({ v: 3, ...metaOf(S), expenses: S.expenses, trips: S.trips, tripExp: TE })); } catch (e) { toast('Could not save — storage may be full'); } }
 function useLocal() { const L = loadLocal() || normalize(null); TE = L.tripExp; delete L.tripExp; S = L; }
 
-const cat = n => S.categories.find(c => c.name === n) || S.incCats.find(c => c.name === n) || { name: n || 'Other', icon: '🏷️', color: '#9e9e9e', budget: 0 };
+const cat = n => S.categories.find(c => c.name === n) || S.incCats.find(c => c.name === n) || [...INSTR, INSTR_OTHER].find(c => c.name === n) || { name: n || 'Other', icon: '🏷️', color: '#9e9e9e', budget: 0 };
 const trip = id => S.trips.find(t => t.id === id);
 const tripByName = n => S.trips.find(t => t.name.toLowerCase() === String(n).trim().toLowerCase());
 const tripExp = id => TE[id] || [];
@@ -427,7 +430,7 @@ function barColor(p) { return p >= 1 ? css('--bad') : p >= .8 ? css('--warn') : 
 function canvasCtx(cv) { const dpr = window.devicePixelRatio || 1, w = cv.clientWidth, h = cv.clientHeight; cv.width = w * dpr; cv.height = h * dpr; const x = cv.getContext('2d'); x.setTransform(dpr, 0, 0, dpr, 0, 0); x.clearRect(0, 0, w, h); return { x, w, h }; }
 // ---------- period helpers (month or year view) ----------
 let pmode = 'month';
-const dSel = { out: null, in: null };               // category picked on each donut
+const dSel = { out: null, in: null, inv: null };               // category picked on each donut
 const pKey = () => pmode === 'year' ? month.slice(0, 4) : month;
 const isYearKey = k => k.length === 4;
 const prevKey = k => isYearKey(k) ? String(+k - 1) : shiftMonth(k, -1);
@@ -451,6 +454,7 @@ function renderStats() {
     <div class="muted" style="margin-top:4px">${ex.length} expenses · ${money(Math.round(net / days))}/day avg${Y ? ` · ${money(Math.round(net / Math.max(1, days / 30.44)))}/month avg` : ''}${refunds ? ` · ${money(refunds)} refunds/cashback deducted` : ''}${diff !== null ? ` · <span class="${diff > 0 ? 'up' : 'down'}">${diff > 0 ? '▲' : '▼'} ${Math.abs(Math.round(diff * 100))}%</span> vs last ${perWord(k)}` : ''}</div>`;
   donut($('#donut'), $('#legend'), $('#outDetail'), ex, S.categories, 'out');
   donut($('#incDonut'), $('#incLegend'), $('#inDetail'), incs.filter(e => !isRefund(e)), S.incCats, 'in');
+  renderInvest(k, all.filter(isInvest), income);
   renderBars(k);
   renderFact($('#factStats'), k);
   renderBudgets(all, Y ? 12 : 1);
@@ -515,14 +519,35 @@ function donut(cv, legend, detail, ex, list, key) {
   legend.innerHTML = byCat.map(o => { const cl = 'lg' + (sel === o.c.name ? ' on' : sel ? ' dim' : ''), d = `data-dc="${esc(o.c.name)}" data-dk="${key}"`; return `<span class="${cl}" ${d}><span class="dot" style="background:${o.c.color}"></span>${o.c.icon} ${esc(o.c.name)}</span><span class="${cl} muted" ${d}>${Math.round(o.v / tot * 100)}%</span><b class="${cl}" ${d}>${money(o.v)}</b>`; }).join('') || `<span class="muted">No data for this ${perWord(pKey())}</span>`;
   legend.classList.toggle('picking', !!byCat.length);
   if (!sel) { detail.innerHTML = byCat.length ? '<div class="muted" style="margin-top:8px">Tap a slice or category to see just that.</div>' : ''; return; }
-  const rows = ex.filter(e => e.cat === sel).sort((a, b) => b.date.localeCompare(a.date) || b.ts - a.ts), c = cat(sel);
+  const rows = ex.filter(e => e.cat === sel).sort((a, b) => b.date.localeCompare(a.date) || b.ts - a.ts), c = list.find(x => x.name === sel) || cat(sel);
   const bud = key === 'out' && c.budget ? c.budget * (isYearKey(pKey()) ? 12 : 1) : 0;
   detail.innerHTML = `<div class="dhead"><b>${c.icon} ${esc(sel)} · ${rows.length} entr${rows.length > 1 ? 'ies' : 'y'}</b><button class="link" data-dclear="${key}">Clear ✕</button></div>
     ${bud ? `<div class="muted">${money(sum(rows))} of ${money(bud)} budget</div><div class="bar"><i style="width:${Math.min(100, sum(rows) / bud * 100)}%;background:${barColor(sum(rows) / bud)}"></i></div>` : ''}
     <div>${rows.slice(0, 40).map(e => itemHTML(e, true)).join('')}</div>${rows.length > 40 ? `<div class="muted">…and ${rows.length - 40} more (see Expenses tab)</div>` : ''}`;
 }
+function renderInvest(k, inv, income) {
+  const Y = isYearKey(k), tot = sum(inv), ever = sum(S.expenses.filter(e => !isInc(e) && isInvest(e)));
+  if (!ever) { $('#invSummary').innerHTML = '<div class="muted">Nothing yet. SIPs, mutual funds, stocks, FD/RD, PPF or NPS debits in your statement land here automatically — or add them under 📈 Investments.</div>'; $('#invBody').classList.add('hidden'); return; }
+  $('#invBody').classList.remove('hidden');
+  $('#invSummary').innerHTML = `<div class="quad"><div><div class="muted">This ${perWord(k)}</div><b style="color:#00897b">${money(tot)}</b></div><div><div class="muted">All time</div><b>${money(ever)}</b></div></div>${income && tot ? `<div class="muted" style="margin-top:6px">${Math.round(tot / income * 100)}% of your income went into investments${tot / income >= .2 ? ' — superb! 🎯' : tot / income >= .1 ? ' — good going 👍' : ' — try to nudge it towards 20%'}</div>` : ''}`;
+  donut($('#invDonut'), $('#invLegend'), $('#invDetail'), inv.map(e => ({ ...e, cat: instrOf(e) })), [...INSTR, INSTR_OTHER], 'inv');
+  const ms = Y ? [...Array(12)].map((_, i) => k + '-' + pad(i + 1)) : [...Array(6)].map((_, i) => shiftMonth(k, i - 5));
+  const vals = ms.map(m => sum(spendIn(m).filter(isInvest).filter(e => !dSel.inv || instrOf(e) === dSel.inv))), mx = Math.max(...vals, 1);
+  $('#invBarsTitle').textContent = (dSel.inv ? dSel.inv + ' · ' : '') + (Y ? 'Invested each month' : 'Invested — last 6 months');
+  const B = canvasCtx($('#invBars'));
+  if (B.w > 20) {
+    const n = ms.length, bw = B.w / n, top = 16, ch = B.h - top - 20, hi = ms.indexOf(month);
+    ms.forEach((m, i) => {
+      const v = vals[i], bh = v / mx * ch, x0 = i * bw + bw * .2;
+      B.x.fillStyle = i === hi ? '#00897b' : '#00897b66'; B.x.beginPath(); B.x.roundRect ? B.x.roundRect(x0, top + ch - bh, bw * .6, bh, [3, 3, 0, 0]) : B.x.rect(x0, top + ch - bh, bw * .6, bh); B.x.fill();
+      B.x.textAlign = 'center'; B.x.font = '11px system-ui';
+      if (v > 0 && n <= 6) { B.x.fillStyle = css('--text'); B.x.fillText(short(v), i * bw + bw / 2, top + ch - bh - 4); }
+      B.x.fillStyle = i === hi ? css('--text') : css('--muted'); B.x.fillText(monthLabel(m, true).slice(0, 3), i * bw + bw / 2, B.h - 5);
+    });
+  }
+}
 function pickCat(key, name) { dSel[key] = dSel[key] === name ? null : name; if (key === 'out' && dSel.out) dSel.in = null; if (key === 'in' && dSel.in) dSel.out = null; renderStats(); }
-['#donut', '#incDonut'].forEach(id => $(id).addEventListener('click', ev => {
+['#donut', '#incDonut', '#invDonut'].forEach(id => $(id).addEventListener('click', ev => {
   const cv = ev.currentTarget, g = cv._g; if (!g) return;
   const r = cv.getBoundingClientRect(), dx = ev.clientX - r.left - g.cx, dy = ev.clientY - r.top - g.cy, d = Math.hypot(dx, dy);
   if (d < g.ri) { if (dSel[cv.dataset.k]) { dSel[cv.dataset.k] = null; renderStats(); } return; }
