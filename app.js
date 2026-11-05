@@ -535,10 +535,14 @@ document.addEventListener('click', ev => {
 // ---------- fun facts ----------
 let factIdx = Math.floor(Math.random() * 50);
 const nice = n => esc(String(n || '').toLowerCase().replace(/\b\w/g, c => c.toUpperCase()));
+const INVEST_RE = /invest|\bsip\b|mutual ?fund|\bmf\b|stocks?\b|equity|zerodha|groww|upstox|kuvera|indmoney|paytm money|\bnps\b|\bppf\b|\bfd\b|\brd\b|fixed deposit|recurring deposit|\bsgb\b/i;
+const isInvest = e => INVEST_RE.test(e.cat) || INVEST_RE.test(e.note);
 function funFacts(m) {
-  const ex = spendIn(m), tot = sum(ex), F = [], Y = isYearKey(m), per = 'this ' + perWord(m);
+  const all = spendIn(m), inv = all.filter(isInvest), ex = all.filter(e => !isInvest(e)), tot = sum(ex), F = [], Y = isYearKey(m), per = 'this ' + perWord(m);
+  // Investments are good money moves: never suggest cutting them — cheer them instead.
+  if (inv.length) F.push(`📈 You put <b>${money(sum(inv))}</b> into investments ${per}. Future-you just sent a thank-you note! Keep it automatic so it happens before the spending does.`);
   if (ex.length < 3) return F;
-  const prev = sum(spendIn(prevKey(m)));
+  const prev = sum(spendIn(prevKey(m)).filter(e => !isInvest(e)));
   const days = daysIn(m), daily = tot / days;
   const food = ex.filter(e => /swiggy|zomato/i.test(e.note));
   if (food.length >= 2) F.push(`🛵 You ordered from Swiggy/Zomato <b>${food.length} times</b> (${money(sum(food))}). Your delivery partner may know your address better than your relatives! Cook just twice a week and save about <b>${money(Math.round(sum(food) * .4))}</b> a month.`);
@@ -564,7 +568,8 @@ function funFacts(m) {
   const fuel = ex.filter(e => /petrol|fuel|hpcl|bpcl|iocl|indian oil|shell/i.test(e.note));
   if (fuel.length) F.push(`⛽ Your vehicle ate <b>${money(sum(fuel))}</b> of fuel ${per} — it's eating better than some of us! Gentle acceleration and correct tyre pressure stretch every litre.`);
   const incs = incomeIn(m), income = sum(incs.filter(e => !isRefund(e))), net = tot - sum(incs.filter(isRefund));
-  if (income > 0) { const sv = income - net; if (sv > 0) { const yr = Y ? sv : sv * 12; F.push(`🏦 You saved <b>${money(sv)}</b> ${per}.${Y ? '' : ` Keep it up and that's <b>${money(yr)}</b> in a year`} — ${Math.max(1, Math.floor(yr / 25000))} Goa trip${yr >= 50000 ? 's' : ''}' worth (but invest most of it 😉).`); } else F.push(`🚨 You spent <b>${money(-sv)} more</b> than you earned. Your wallet has filed a complaint! Try the 50-30-20 rule: 50% needs, 30% wants, 20% savings.`); }
+  if (income > 0) { const sv = income - net; if (sv > 0) { const yr = Y ? sv : sv * 12; F.push(`🏦 You saved <b>${money(sv)}</b> ${per}${inv.length ? ` (including ${money(sum(inv))} invested — nice!)` : ''}.${Y ? '' : ` Keep it up and that's <b>${money(yr)}</b> in a year`} — ${Math.max(1, Math.floor(yr / 25000))} Goa trip${yr >= 50000 ? 's' : ''}' worth (but invest most of it 😉).`); }
+    else if (sum(inv)) F.push(`🚨 Spending ate up all your income ${per} — even before counting the ${money(sum(inv))} you invested. Protect the investing, trim the wants: 50% needs, 30% wants, 20% savings.`); else F.push(`🚨 You spent <b>${money(-sv)} more</b> than you earned. Your wallet has filed a complaint! Try the 50-30-20 rule: 50% needs, 30% wants, 20% savings.`); }
   return F;
 }
 // Home screen uses the latest month that has spending (e.g. last month's statement).
