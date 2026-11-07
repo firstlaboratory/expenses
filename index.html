@@ -119,6 +119,11 @@ canvas{width:100%;display:block}
 .selbar{position:fixed;left:0;right:0;bottom:calc(56px + env(safe-area-inset-bottom));z-index:12;background:var(--card);border-top:1px solid var(--line);box-shadow:0 -4px 14px #0002;padding:10px 16px}
 .selbtns{display:flex;gap:5px;margin-top:8px}.selbtns button{flex:1 1 auto;padding:9px 4px;font-size:13px;white-space:nowrap}.selbtns [data-bulk=all],.selbtns [data-bulk=del]{flex:0 0 auto;padding:9px 10px}
 .frow{cursor:pointer}
+.nudge{display:flex;gap:10px;align-items:center;justify-content:space-between;background:var(--card);border:1px solid var(--line);border-left:4px solid var(--warn);border-radius:12px;padding:12px 14px;margin-bottom:10px;width:100%;text-align:left;font:inherit;color:var(--text)}
+.nudge-btn{border-left-color:var(--accent);cursor:pointer}.nudge .link{white-space:nowrap;flex:none}.nudge .go{color:var(--accent);font-weight:700;white-space:nowrap}
+.chk{border-radius:10px;padding:10px 12px;margin:10px 0 0;font-size:14px;background:var(--bg);border:1px solid var(--line)}
+.chk.ok{border-color:var(--good)}.chk.bad{border-color:var(--warn);background:#f59e0b14}
+.revcard{background:var(--bg);border:1px solid var(--line);border-radius:12px;padding:12px 14px;margin:10px 0}
 .tgl{display:flex;justify-content:space-between;align-items:center;width:100%;margin-top:14px;background:var(--bg)}
 .tgl i{width:38px;height:22px;border-radius:11px;background:var(--line);position:relative;transition:.2s}.tgl i::after{content:'';position:absolute;left:3px;top:3px;width:16px;height:16px;border-radius:50%;background:#fff;transition:.2s}
 .tgl.on i{background:var(--accent)}.tgl.on i::after{left:19px}
@@ -138,6 +143,7 @@ body.selecting main{padding-bottom:180px}
 <main>
 
 <section id="v-add" class="on">
+  <div id="nudges"></div>
   <div class="card hero">
     <div class="hero-top"><div class="hero-ic">📄</div><div><h2>Upload bank statement</h2><p class="muted">CSV, Delimited or Excel from HDFC and most banks. Spends and income are added and sorted into categories for you. Trickle CSV files and backups work too.</p></div></div>
     <label>Add to<select id="impTarget"></select></label>
@@ -186,6 +192,7 @@ body.selecting main{padding-bottom:180px}
   <div class="card fact-card" id="factStats"></div>
   <div class="card"><div class="label" style="margin-top:0">Spending by category</div><canvas id="donut" style="height:210px;cursor:pointer"></canvas><div class="legend" id="legend"></div><div id="outDetail"></div></div>
   <div class="card"><div class="label" style="margin-top:0">Income by source</div><canvas id="incDonut" style="height:210px;cursor:pointer"></canvas><div class="legend" id="incLegend"></div><div id="inDetail"></div></div>
+  <div class="card"><div class="label" style="margin-top:0">🔁 Regular payments</div><div id="recurBox"></div></div>
   <div class="card"><div class="label" style="margin-top:0">🤝 Paid for friends</div><div id="friendsBox"></div></div>
   <div class="card"><div class="label" style="margin-top:0">📈 Investments</div><div id="invSummary"></div>
     <div id="invBody"><canvas id="invDonut" style="height:190px;cursor:pointer;margin-top:10px"></canvas><div class="legend" id="invLegend"></div><div id="invDetail"></div>
@@ -243,6 +250,6 @@ body.selecting main{padding-bottom:180px}
 <input type="file" id="impFile" hidden accept=".csv,.txt,.xls,.xlsx,.json,text/csv,text/plain,application/json,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet">
 <div class="sheet-bg" id="sheetBg"><div class="sheet" id="sheet"></div></div>
 <div class="toast" id="toast"></div>
-<script type="module" src="app.js?v=17"></script>
+<script type="module" src="app.js?v=18"></script>
 </body>
 </html>

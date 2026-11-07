@@ -5,7 +5,7 @@ const FB = 'https://www.gstatic.com/firebasejs/10.12.2/';
 const XLSX_URL = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
 const LKEY = 'kharcha_v1';
 const MODES = ['UPI', 'Card', 'Cash', 'Bank'];
-const DEFAULT_CATS = [['Food','🍛','#e8833a'],['Groceries','🛒','#43a047'],['Transport','⛽','#1e88e5'],['Shopping','🛍️','#8e24aa'],['Bills','💡','#fb8c00'],['Rent','🏠','#6d4c41'],['Health','💊','#e53935'],['Entertainment','🎬','#00acc1'],['Travel','✈️','#3949ab'],['Stay','🏨','#5e35b1'],['Education','📚','#546e7a'],['Gifts','🎁','#d81b60'],['Investments','📈','#00897b'],['Other','📦','#9e9e9e']];
+const DEFAULT_CATS = [['Food','🍛','#e8833a'],['Groceries','🛒','#43a047'],['Transport','⛽','#1e88e5'],['Shopping','🛍️','#8e24aa'],['Bills','💡','#fb8c00'],['Rent','🏠','#6d4c41'],['House budget','🏡','#a1887f'],['Health','💊','#e53935'],['Entertainment','🎬','#00acc1'],['Travel','✈️','#3949ab'],['Stay','🏨','#5e35b1'],['Education','📚','#546e7a'],['Gifts','🎁','#d81b60'],['Investments','📈','#00897b'],['Other','📦','#9e9e9e']];
 const KEYWORDS = [['Food',/swiggy|zomato|restaurant|cafe|bakery|food|dominos|kfc|mcdonald|starbucks|biryani|mess\b/],['Groceries',/bigbasket|blinkit|zepto|dmart|grocer|supermarket|instamart|more retail|reliance fresh|jiomart|vegetable/],['Transport',/uber|\bola\b|rapido|petrol|fuel|hpcl|bpcl|iocl|indian oil|shell|fastag|metro|irctc|redbus|parking|toll/],['Shopping',/amazon|flipkart|myntra|ajio|meesho|nykaa|croma|decathlon/],['Bills',/electricity|tneb|tangedco|airtel|\bjio\b|vodafone|bsnl|recharge|broadband|\bgas\b|bill|dth/],['Health',/pharm|apollo|medic|hospital|clinic|\blab\b|diagnos|1mg|netmeds/],['Entertainment',/netflix|hotstar|prime video|spotify|bookmyshow|pvr|inox|youtube/],['Stay',/oyo|hotel|resort|airbnb|homestay|lodge|treebo|fabhotel/],['Travel',/makemytrip|goibibo|indigo|air india|vistara|akasa|booking\.com|cleartrip|ixigo/],['Education',/udemy|coursera|school|college|tuition|books/],['Rent',/\brent\b|nobroker/]];
 const DEFAULT_INC = [['Salary','💼','#2e7d32'],['Interest','🏦','#00897b'],['Refund','↩️','#5c6bc0'],['Cashback','🎉','#f9a825'],['Gift received','🎁','#ec407a'],['Other income','💰','#7cb342']];
 const INC_KEYWORDS = [['Salary',/salary|\bsal\b|payroll|wages/],['Interest',/int\.? ?pd|interest|int\.? ?coll/],['Refund',/refund|reversal|\brev\b|rfnd/],['Cashback',/cashback|cash back|reward/]];
@@ -52,7 +52,7 @@ function css(v) { return getComputedStyle(document.documentElement).getPropertyV
 let tt; function toast(m, ms = 2600) { const t = $('#toast'); t.textContent = m; t.classList.add('show'); clearTimeout(tt); tt = setTimeout(() => t.classList.remove('show'), ms); }
 
 // ================= state =================
-const blankMeta = () => ({ categories: DEFAULT_CATS.map(([name, icon, color]) => ({ name, icon, color, budget: 0 })), incCats: DEFAULT_INC.map(([name, icon, color]) => ({ name, icon, color })), people: ['Me'], rules: [], lastPerson: 'Me', name: '' });
+const blankMeta = () => ({ stmts: [], dismissed: [], houseAdded: true, categories: DEFAULT_CATS.map(([name, icon, color]) => ({ name, icon, color, budget: 0 })), incCats: DEFAULT_INC.map(([name, icon, color]) => ({ name, icon, color })), people: ['Me'], rules: [], lastPerson: 'Me', name: '' });
 let S = { ...blankMeta(), expenses: [], trips: [] };
 let TE = {};                       // tripId -> [expenses]
 let user = null, fb = null, cloud = false, authKnown = false, pending = 0;
@@ -74,10 +74,14 @@ function normalize(b) {
   if (!out.categories.some(c => INVEST_RE.test(c.name))) { const i = out.categories.findIndex(c => c.name === 'Other'); out.categories.splice(i < 0 ? out.categories.length : i, 0, { name: 'Investments', icon: '📈', color: '#00897b', budget: 0 }); }
   if (!out.categories.some(c => c.name === OWE_OUT)) { const i = out.categories.findIndex(c => c.name === 'Other'); out.categories.splice(i < 0 ? out.categories.length : i, 0, { name: OWE_OUT, icon: '🤝', color: '#8d6e63', budget: 0 }); }
   if (!out.incCats.some(c => c.name === OWE_IN)) out.incCats.push({ name: OWE_IN, icon: '🔁', color: '#8d6e63' });
+  if (!b.houseAdded && !out.categories.some(c => c.name === 'House budget')) { const i = out.categories.findIndex(c => c.name === 'Rent'); out.categories.splice(i < 0 ? 0 : i + 1, 0, { name: 'House budget', icon: '🏡', color: '#a1887f', budget: 0 }); }
+  out.houseAdded = true;
+  out.stmts = (Array.isArray(b.stmts) ? b.stmts : []).filter(x => x && /^\d{4}-\d{2}-\d{2}$/.test(x.from) && /^\d{4}-\d{2}-\d{2}$/.test(x.to)).map(x => ({ from: x.from, to: x.to, ...(isFinite(+x.opening) && x.opening !== null && x.opening !== '' ? { opening: +x.opening, closing: +x.closing } : {}), n: +x.n || 0 }));
+  out.dismissed = (Array.isArray(b.dismissed) ? b.dismissed : []).map(String);
   out.rules = (Array.isArray(b.rules) ? b.rules : []).filter(r => r && r.k).map(r => ({ k: String(r.k), cat: cn(r.cat) }));
   const splitOf_ = e => Array.isArray(e.split) && e.split.length ? { split: e.split.filter(x => x && x.who && +x.amount > 0).map(x => ({ who: String(x.who), amount: r2(+x.amount), ...(+x.shares ? { shares: +x.shares } : {}) })), splitBy: e.splitBy === 'amount' ? 'amount' : 'shares', meShares: +e.meShares >= 0 ? +e.meShares : 1 } : {};
   const splitOf = splitOf_;
-  const fixE = e => ({ id: String(e.id || uid()), ts: +e.ts || Date.now(), date: String(e.date), amount: r2(+e.amount), cat: cn(e.cat), mode: MODES.includes(e.mode) ? e.mode : 'UPI', person: String(e.person || 'Me'), note: String(e.note || ''), ...(e.type === 'in' ? { type: 'in' } : {}), ...(e.who ? { who: String(e.who) } : {}), ...splitOf(e) });
+  const fixE = e => ({ id: String(e.id || uid()), ts: +e.ts || Date.now(), date: String(e.date), amount: r2(+e.amount), cat: cn(e.cat), mode: MODES.includes(e.mode) ? e.mode : 'UPI', person: String(e.person || 'Me'), note: String(e.note || ''), ...(e.type === 'in' ? { type: 'in' } : {}), ...(e.who ? { who: String(e.who) } : {}), ...(e.reviewed ? { reviewed: true } : {}), ...splitOf(e) });
   const ok = e => e && /^\d{4}-\d{2}-\d{2}$/.test(e.date) && +e.amount > 0;
   out.expenses = (b.expenses || []).filter(ok).map(fixE);
   (b.trips || []).forEach(t => {
@@ -90,7 +94,7 @@ function normalize(b) {
   return out;
 }
 function loadLocal() { try { const raw = localStorage.getItem(LKEY); return raw ? normalize(JSON.parse(raw)) : null; } catch (e) { return null; } }
-const metaOf = o => ({ categories: o.categories, incCats: o.incCats, people: o.people, rules: o.rules, lastPerson: o.lastPerson, name: o.name || '' });
+const metaOf = o => ({ categories: o.categories, incCats: o.incCats, people: o.people, rules: o.rules, lastPerson: o.lastPerson, stmts: o.stmts || [], dismissed: o.dismissed || [], houseAdded: true, name: o.name || '' });
 function saveLocal() { if (cloud) return; try { localStorage.setItem(LKEY, JSON.stringify({ v: 3, ...metaOf(S), expenses: S.expenses, trips: S.trips, tripExp: TE })); } catch (e) { toast('Could not save — storage may be full'); } }
 function useLocal() { const L = loadLocal() || normalize(null); TE = L.tripExp; delete L.tripExp; S = L; }
 
@@ -114,14 +118,16 @@ const catName = n => ([...S.categories, ...S.incCats].find(c => c.name.toLowerCa
 // ================= data writes (local or cloud) =================
 function track(p) { pending++; schedule(); return p.catch(fail).finally(() => { pending--; schedule(); }); }
 function fail(err) { console.error(err); const c = err && err.code || ''; toast(/permission/.test(c) ? 'Not allowed — check Firestore rules' : 'Sync error: ' + (c || err.message), 4500); }
-function strip(e) { const o = { date: e.date, amount: e.amount, cat: e.cat, mode: e.mode, person: e.person, note: e.note || '', ts: e.ts || Date.now() }; if (isInc(e)) o.type = 'in'; if (e.who) o.who = e.who; if (hasSplit(e)) { o.split = e.split; o.splitBy = e.splitBy || 'shares'; o.meShares = e.meShares ?? 1; } if (e.trip) o.trip = e.trip; if (cloud) o.by = user.uid; return o; }
+function strip(e) { const o = { date: e.date, amount: e.amount, cat: e.cat, mode: e.mode, person: e.person, note: e.note || '', ts: e.ts || Date.now() }; if (isInc(e)) o.type = 'in'; if (e.who) o.who = e.who; if (e.reviewed) o.reviewed = true; if (hasSplit(e)) { o.split = e.split; o.splitBy = e.splitBy || 'shares'; o.meShares = e.meShares ?? 1; } if (e.trip) o.trip = e.trip; if (cloud) o.by = user.uid; return o; }
 function eRef(e) { const F = fb.F; return e.trip ? F.doc(fb.db, 'trips', e.trip, 'expenses', e.id) : F.doc(fb.db, 'users', user.uid, 'expenses', e.id); }
 function collOf(e) { if (!e.trip) return S.expenses; return TE[e.trip] || (TE[e.trip] = []); }
 function localPut(e) { const c = collOf(e), i = c.findIndex(x => x.id === e.id); if (i >= 0) c[i] = e; else c.push(e); }
 function localDel(e) { const c = collOf(e), i = c.findIndex(x => x.id === e.id); if (i >= 0) c.splice(i, 1); }
-function putExp(e) { localPut(e); if (cloud) track(fb.F.setDoc(eRef(e), strip(e))); else saveLocal(); schedule(); }
+function markReviewed(e) { const o = findExp(e.id, e.trip); if (o && o.cat !== e.cat) e.reviewed = true; return e; }
+function putExp(e) { markReviewed(e); localPut(e); if (cloud) track(fb.F.setDoc(eRef(e), strip(e))); else saveLocal(); schedule(); }
 function delExp(e) { localDel(e); if (cloud) track(fb.F.deleteDoc(eRef(e))); else saveLocal(); schedule(); }
 function putMany(list, del = false) {
+  if (!del) list.forEach(markReviewed);
   list.forEach(del ? localDel : localPut);
   if (cloud) { for (let i = 0; i < list.length; i += 400) { const b = fb.F.writeBatch(fb.db); list.slice(i, i + 400).forEach(e => del ? b.delete(eRef(e)) : b.set(eRef(e), strip(e))); track(b.commit()); } }
   else saveLocal();
@@ -190,7 +196,7 @@ function startCloud() {
     schedule();
   }, fail));
 }
-function normalizeE(d) { const x = d.data(); return { id: d.id, ts: +x.ts || 0, date: x.date, amount: +x.amount, cat: x.cat || 'Other', mode: x.mode || 'UPI', person: x.person || '', note: x.note || '', by: x.by, ...(x.type === 'in' ? { type: 'in' } : {}), ...(x.who ? { who: x.who } : {}), ...(Array.isArray(x.split) && x.split.length ? { split: x.split, splitBy: x.splitBy || 'shares', meShares: x.meShares ?? 1 } : {}) }; }
+function normalizeE(d) { const x = d.data(); return { id: d.id, ts: +x.ts || 0, date: x.date, amount: +x.amount, cat: x.cat || 'Other', mode: x.mode || 'UPI', person: x.person || '', note: x.note || '', by: x.by, ...(x.type === 'in' ? { type: 'in' } : {}), ...(x.who ? { who: x.who } : {}), ...(x.reviewed ? { reviewed: true } : {}), ...(Array.isArray(x.split) && x.split.length ? { split: x.split, splitBy: x.splitBy || 'shares', meShares: x.meShares ?? 1 } : {}) }; }
 function migrateLocal(fresh) {
   if (migrated) return; migrated = true;
   const L = loadLocal(); if (!L) return;
@@ -328,6 +334,67 @@ function splitFromForm() {
   if (c.me < 0) return { ok: false, msg: "Friends' shares are more than the total" };
   return { ok: true, data: { split: rows.map(r => ({ who: r.who, amount: r.amount, ...(SPL.by === 'shares' ? { shares: r.shares } : {}) })), splitBy: SPL.by, meShares: SPL.me } };
 }
+const ATM_RE = /^(ATW|NWD|EAW)\b|^(ATW|NWD|EAW)-|\bATM\b|CASH WDL|CASH WITHDRAWAL/i;
+const needsReview = e => !e.trip && !e.reviewed && !isFriend(e) && !hasSplit(e) && (isInc(e) ? e.cat === 'Other income' : (e.cat === 'Other' || ATM_RE.test(e.note)));
+const reviewQueue = () => S.expenses.filter(needsReview).sort((a, b) => b.date.localeCompare(a.date));
+function coverage() {
+  const days = new Set(), addRange = (f, t) => { const d = new Date(f + 'T00:00'), end = new Date(t + 'T00:00'); while (d <= end) { days.add(ymd(d)); d.setDate(d.getDate() + 1); } };
+  const st = [...(S.stmts || [])].sort((a, b) => a.from.localeCompare(b.from));
+  st.forEach((x, i) => { addRange(x.from, x.to); const n = st[i + 1]; if (n && x.closing !== undefined && n.opening !== undefined && Math.abs(x.closing - n.opening) <= .5 && n.from > x.to) addRange(x.to, n.from); });
+  const cov = {}; days.forEach(d => cov[d.slice(0, 7)] = (cov[d.slice(0, 7)] || 0) + 1);
+  const bm = {}; S.expenses.forEach(e => { if (/^[bi][0-9a-z]+$/.test(e.id)) bm[mk(e.date)] = (bm[mk(e.date)] || 0) + 1; });
+  Object.keys(bm).forEach(m => { if (bm[m] >= 5 && !(m in cov)) cov[m] = 99; });
+  return cov;
+}
+// Months with no statement at all, between the first uploaded month and last month.
+function missingMonths() {
+  const cov = coverage(), ms = Object.keys(cov).sort(); if (!ms.length) return [];
+  const last = shiftMonth(mk(today()), -1), out = [];
+  for (let m = ms[0]; m <= last; m = shiftMonth(m, 1)) if (!cov[m] && !(S.dismissed || []).includes(m)) out.push({ m });
+  return out.reverse();
+}
+function renderNudges() {
+  const q = reviewQueue(), mm = missingMonths(), el = $('#nudges'); let h = '';
+  if (mm.length) { const x = mm[0]; h += `<div class="nudge"><div><b>📅 ${monthLabel(x.m)} statement not uploaded</b><div class="muted">Upload it so no spending is missed.${mm.length > 1 ? ` Also missing: ${mm.slice(1, 4).map(y => monthLabel(y.m, true)).join(', ')}${mm.length > 4 ? '…' : ''}.` : ''}</div></div><button class="link" data-dismiss="${x.m}">Not needed</button></div>`; }
+  if (q.length) h += `<button class="nudge nudge-btn" id="reviewGo"><div><b>📥 ${q.length} entr${q.length > 1 ? 'ies' : 'y'} to review</b><div class="muted">${q.some(e => ATM_RE.test(e.note)) ? 'Cash withdrawals and unsorted spends' : 'Unsorted spends'} — give them a category</div></div><span class="go">Review ›</span></button>`;
+  el.innerHTML = h;
+}
+$('#nudges').onclick = ev => {
+  const d = ev.target.closest('[data-dismiss]'); if (d) { S.dismissed = [...(S.dismissed || []), d.dataset.dismiss]; saveMeta(); toast(`Won't remind about ${monthLabel(d.dataset.dismiss)}`); return; }
+  if (ev.target.closest('#reviewGo')) { revSkip = new Set(); openReview(); }
+};
+let revSkip = new Set();
+function openReview() {
+  const q = reviewQueue().filter(e => !revSkip.has(e.id));
+  if (!q.length) { closeSheet(); toast(reviewQueue().length ? 'Skipped the rest for now' : 'All reviewed 🎉'); return; }
+  const e = q[0], atm = ATM_RE.test(e.note), inc = isInc(e), list = (inc ? S.incCats : S.categories).filter(c => c.name !== 'Other' && c.name !== 'Other income' && c.name !== OWE_OUT && c.name !== OWE_IN);
+  const key = keyOf(e.note), total = reviewQueue().length;
+  const first = atm ? ['House budget', 'Food', 'Groceries', 'Transport'] : [];
+  const sorted = [...list.filter(c => first.includes(c.name)).sort((a, b) => first.indexOf(a.name) - first.indexOf(b.name)), ...list.filter(c => !first.includes(c.name))];
+  openSheet(`<div class="row" style="align-items:center"><h3>Review · ${total} left</h3><button class="link" data-r="close" style="flex:0 0 auto">Done</button></div>
+    <div class="revcard"><div class="t" style="white-space:normal;font-weight:600">${esc(e.note || '(no description)')}</div><div class="muted">${niceDate(e.date)} · ${e.mode}${atm ? ' · cash withdrawal' : ''}</div><div class="big${inc ? ' inc' : ''}" style="font-size:24px;margin-top:4px">${inc ? '+' : ''}${money(e.amount)}</div></div>
+    ${atm ? '<p class="muted" style="margin:0 0 8px">Gave the cash to family? Pick 🏡 House budget. Gave it to a friend? Tap 🤝.</p>' : ''}
+    <div class="chips">${sorted.map(c => `<button class="chip" data-r="cat" data-c="${esc(c.name)}">${c.icon} ${esc(c.name)}</button>`).join('')}</div>
+    ${!atm && key.length > 2 ? `<label class="pvrow" style="border:0;padding:10px 0 0"><input type="checkbox" id="revRem" checked><span class="muted">Remember for “${esc(e.note)}”</span></label>` : ''}
+    <div class="btns" style="margin:12px 0 0"><button data-r="friend">🤝 ${inc ? 'Friend paid back' : 'For a friend'}</button>${inc ? '' : '<button data-r="split">➗ Split</button>'}</div>
+    <div class="btns" style="margin:8px 0 0"><button data-r="keep">✓ Keep as ${inc ? 'Other income' : 'Other'}</button><button data-r="skip">Skip ›</button></div>`, ev => {
+    const b = ev.target.closest('[data-r]'); if (!b) return;
+    const a = b.dataset.r;
+    if (a === 'close') return closeSheet();
+    if (a === 'skip') { revSkip.add(e.id); return openReview(); }
+    if (a === 'keep') { putExp({ ...e, reviewed: true }); return openReview(); }
+    if (a === 'friend') return askFriend('Which friend?', `${esc(e.note)} · ${money(e.amount)}`, n => { markFriend([e], n); setTimeout(openReview, 50); });
+    if (a === 'split') { closeSheet(); startEdit(e.id, ''); SPL.on = true; renderSplit(true); return; }
+    if (a === 'cat') {
+      const c = b.dataset.c, rem = $('#revRem') && $('#revRem').checked;
+      const same = rem ? reviewQueue().filter(x => x.id !== e.id && keyOf(x.note) === key && isInc(x) === inc) : [];
+      putMany([e, ...same].map(x => ({ ...x, cat: c, reviewed: true })));
+      if (rem) { setRule(e.note, c); saveMeta(); }
+      toast(`${c}${same.length ? ` · ${same.length + 1} entries` : ''}${rem ? ' · remembered' : ''}`);
+      return openReview();
+    }
+  });
+}
 function renderAdd() {
   const tv = $('#impTarget').value; $('#impTarget').innerHTML = targetOptions(tv); if (tv && !trip(tv)) $('#impTarget').value = '';
   const fv = $('#fFor').value; $('#fFor').innerHTML = targetOptions(fv);
@@ -347,6 +414,7 @@ function renderAdd() {
   renderSplit(true);
   if (!$('#date').value) $('#date').value = today();
   renderFact($('#factAdd'), factMonth());
+  renderNudges();
   const r = allExp().sort((a, b) => b.ts - a.ts).slice(0, 6);
   $('#recent').innerHTML = r.length ? r.map(e => itemHTML(e, true)).join('') : '<div class="empty">Nothing yet. Upload a statement or add an expense.</div>';
 }
@@ -614,6 +682,7 @@ function renderStats() {
   donut($('#incDonut'), $('#incLegend'), $('#inDetail'), incs.filter(e => !isRefund(e)), S.incCats, 'in');
   renderInvest(k, all.filter(isInvest), income);
   renderFriends();
+  renderRecurring();
   renderBars(k);
   renderFact($('#factStats'), k);
   renderBudgets(all, Y ? 12 : 1);
@@ -684,6 +753,35 @@ function donut(cv, legend, detail, ex, list, key) {
     ${bud ? `<div class="muted">${money(sum(rows))} of ${money(bud)} budget</div><div class="bar"><i style="width:${Math.min(100, sum(rows) / bud * 100)}%;background:${barColor(sum(rows) / bud)}"></i></div>` : ''}
     <div>${rows.slice(0, 40).map(e => itemHTML(e, true)).join('')}</div>${rows.length > 40 ? `<div class="muted">…and ${rows.length - 40} more (see Expenses tab)</div>` : ''}`;
 }
+function recurring() {
+  const g = {};
+  S.expenses.forEach(e => { if (isInc(e) || isFriend(e) || e.trip || ATM_RE.test(e.note)) return; const k = keyOf(e.note).replace(/\b(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\b/g, '').replace(/\s+/g, ' ').trim(); if (k.length < 3) return; (g[k] = g[k] || []).push(e); });
+  const lastData = S.expenses.map(e => e.date).sort().pop(); if (!lastData) return [];
+  const out = [];
+  Object.entries(g).forEach(([k, list]) => {
+    const pm = {}; list.forEach(e => { const m = mk(e.date); pm[m] = pm[m] || { n: 0, v: 0 }; pm[m].n++; pm[m].v += myShare(e); });
+    const ms = Object.keys(pm).sort(); if (ms.length < 2) return;
+    if (ms.some(m => pm[m].n > 2)) return;                              // daily habits, not bills
+    const vals = ms.map(m => pm[m].v).sort((a, b) => a - b), med = vals[Math.floor(vals.length / 2)];
+    const steady = ms.filter(m => Math.abs(pm[m].v - med) <= med * .25).length;
+    if (steady < Math.max(2, Math.ceil(ms.length * .7))) return;
+    if (ms.length < 3 && shiftMonth(ms[0], 1) !== ms[1]) return;       // two months must be back to back
+    const last = list.map(e => e.date).sort().pop();
+    if (daysBetween(last, lastData) > 45) return;                        // stopped
+    const e0 = list.find(e => e.date === last);
+    out.push({ k, name: e0.note.replace(/\b(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\b/ig, '').replace(/\s+/g, ' ').trim(), cat: e0.cat, med: r2(med), months: ms.length, last, inv: isInvest(e0) });
+  });
+  return out.sort((a, b) => b.med - a.med);
+}
+function renderRecurring() {
+  const r = recurring();
+  if (!r.length) { $('#recurBox').innerHTML = '<div class="muted">Bills, rent, subscriptions and SIPs that repeat every month will show up here once you have two or more months of statements.</div>'; return; }
+  const spend = r.filter(x => !x.inv), inv = r.filter(x => x.inv), ts = sum(spend.map(x => ({ amount: x.med }))), ti = sum(inv.map(x => ({ amount: x.med })));
+  const row = x => { const c = cat(x.cat); return `<div class="settle frow" data-rec="${esc(x.name)}"><span>${c.icon} ${nice(x.name)}<span class="muted"> · ${x.months} months · last ${niceDate(x.last)}</span></span><b>${money(x.med)}</b></div>`; };
+  $('#recurBox').innerHTML = `<div class="big" style="font-size:24px">${money(ts)}<span class="muted" style="font-size:14px;font-weight:400"> / month committed</span></div>${ti ? `<div class="muted">+ ${money(ti)} / month regular investments 📈</div>` : ''}
+    ${spend.map(row).join('')}${inv.length ? `<div class="label">Regular investments</div>${inv.map(row).join('')}` : ''}<p class="muted" style="margin-bottom:0">Tap one to see all its payments.</p>`;
+}
+document.addEventListener('click', ev => { const r = ev.target.closest('[data-rec]'); if (r) { go('list'); pmode = 'year'; $('#fType').value = ''; $('#fCat').value = ''; $('#fPerson').value = ''; $('#fSearch').value = r.dataset.rec; render(); } });
 let openFriend = null;
 function renderFriends() {
   const fe = own().filter(e => isFriend(e) && e.who);
@@ -942,22 +1040,52 @@ async function importFile(file, target) {
     showPreview(res, target);
   } catch (err) { console.error(err); toast('Could not read file: ' + err.message, 5000); }
 }
+// Checks a bank statement's running balance: every row should equal previous balance − withdrawal + deposit.
+function balanceCheck(seq) {
+  if (!seq.length) return null;
+  const dates = seq.map(x => x.d).sort(), from = dates[0], to = dates[dates.length - 1];
+  const wd = r2(seq.reduce((t, x) => t + x.w, 0)), dep = r2(seq.reduce((t, x) => t + x.c, 0));
+  if (seq.some(x => x.b === null)) return { from, to, wd, dep, n: seq.length };
+  const test = q => { let bad = 0, first = null; for (let i = 1; i < q.length; i++) if (Math.abs(r2(q[i - 1].b - q[i].w + q[i].c) - q[i].b) > .5) { bad++; if (!first) first = q[i].d; } return { bad, first }; };
+  let q = seq, t = test(q); const rev = [...seq].reverse(), t2 = test(rev); if (t2.bad < t.bad) { q = rev; t = t2; }
+  const opening = r2(q[0].b + q[0].w - q[0].c), closing = q[q.length - 1].b;
+  return { from, to, wd, dep, n: q.length, opening, closing, bad: t.bad, firstBad: t.first, sums: Math.abs(r2(opening - wd + dep) - closing) <= .5 };
+}
+function balanceHTML(b) {
+  if (!b) return '';
+  let h = '';
+  if (b.opening === undefined) h = `<div class="chk">📅 ${niceDate(b.from)} – ${niceDate(b.to)} · ${b.n} transactions. <span class="muted">No balance column, so the totals can't be cross-checked.</span></div>`;
+  else if (!b.bad && b.sums) h = `<div class="chk ok">✓ <b>Balance check passed</b><br><span class="muted">${niceDate(b.from)} – ${niceDate(b.to)}: opening ${money(b.opening)} − spent ${money(b.wd)} + received ${money(b.dep)} = closing ${money(b.closing)}. All ${b.n} transactions read.</span></div>`;
+  else h = `<div class="chk bad">⚠ <b>Balance doesn't add up</b><br><span class="muted">${b.bad} row${b.bad > 1 ? 's' : ''} don't match the running balance${b.firstBad ? ` (first around ${niceDate(b.firstBad)})` : ''}. A line may be missing or misread — check the statement before importing.</span></div>`;
+  const prev = (S.stmts || []).filter(x => x.to < b.from && x.closing !== undefined).sort((a, c) => c.to.localeCompare(a.to))[0];
+  if (prev && b.opening !== undefined) {
+    const gap = r2(b.opening - prev.closing);
+    if (Math.abs(gap) > .5) h += `<div class="chk bad">⚠ <b>Gap since your last statement</b><br><span class="muted">It ended at ${money(prev.closing)} on ${niceDate(prev.to)}, but this one opens at ${money(b.opening)} — ${money(Math.abs(gap))} of transactions between ${niceDate(prev.to)} and ${niceDate(b.from)} are missing.</span></div>`;
+    else if (daysBetween(prev.to, b.from) > 1) h += `<div class="chk ok">✓ Continues from your statement ending ${niceDate(prev.to)} (balance matches).</div>`;
+  }
+  return h;
+}
+const daysBetween = (a, b) => Math.round((new Date(b + 'T00:00') - new Date(a + 'T00:00')) / 864e5);
 function rowsToExpenses(rows) {
   const low = r => r.map(c => String(c ?? '').toLowerCase().trim());
   const hi = rows.findIndex(r => { const h = low(r); return h.some(c => /date/.test(c)) && h.some(c => /withdrawal|debit|^amount/.test(c)); });
   if (hi < 0) throw new Error('no header row with Date and Withdrawal/Debit/Amount columns');
   const H = low(rows[hi]), col = re => H.findIndex(h => re.test(h)), now = Date.now(), list = [];
-  const wcol = col(/withdrawal|debit/), dcol = col(/deposit|credit/);
+  const wcol = col(/withdrawal|debit/), dcol = col(/deposit|credit/), bcol = col(/closing|balance/);
   if (wcol >= 0) {
     let cd = H.findIndex(h => /date/.test(h) && !/value/.test(h)); if (cd < 0) cd = col(/date/);
     const cn = col(/narration|description|particular|remark|detail|transaction/), cr = col(/ref|chq|cheque/);
+    const seq = [];
     rows.slice(hi + 1).forEach((r, i) => {
       const d = parseDate(r[cd]), amt = num(r[wcol]), dep = dcol >= 0 ? num(r[dcol]) : 0; if (!d) return;
+      if (amt > 0 || dep > 0) seq.push({ d, w: amt > 0 ? amt : 0, c: dep > 0 ? dep : 0, b: bcol >= 0 && String(r[bcol] ?? '').trim() !== '' ? num(r[bcol]) : null });
       const n = String(cn >= 0 ? r[cn] ?? '' : '').trim();
       if (!(amt > 0)) { if (dep > 0) list.push({ id: 'i' + hash(d + '|' + dep + '|' + n + '|' + (cr >= 0 ? r[cr] : '')), ts: now - i, type: 'in', date: d, amount: r2(dep), cat: guessInc(n), mode: guessMode(n), person: '', note: cleanNarration(n), raw: n }); return; }
       list.push({ id: 'b' + hash(d + '|' + amt + '|' + n + '|' + (cr >= 0 ? r[cr] : '')), ts: now - i, date: d, amount: r2(amt), cat: guessCat(n), mode: guessMode(n), person: '', note: cleanNarration(n), raw: n });
     });
-    return { kind: 'bank', list };
+    const bal = balanceCheck(seq), hdr = rows.slice(0, hi).map(r => r.join(' ')).join(' ').match(/from\s*:?\s*(\d{1,2}[\/\-.]\d{1,2}[\/\-.]\d{2,4})\s*to\s*:?\s*(\d{1,2}[\/\-.]\d{1,2}[\/\-.]\d{2,4})/i);
+    if (bal && hdr) { const f = parseDate(hdr[1]), t = parseDate(hdr[2]); if (f && t && f <= bal.from && t >= bal.to) { bal.from = f; bal.to = t; } }
+    return { kind: 'bank', list, bal };
   }
   const cty = col(/^type$/), cd = col(/^date$/), ca = col(/^amount/), cc = col(/categ/), cm = col(/mode/), cp = col(/paid ?by|person/), cn = col(/note|desc/), ct = col(/^trip$/), ci = col(/^id$/), cw = col(/^friend$/), cs = col(/^split$/);
   rows.slice(hi + 1).forEach((r, i) => {
@@ -980,9 +1108,10 @@ function showPreview(res, target) {
     return { e, dest, dup, on: !dup && !xfer && !out, why: dup ? 'Already added' : xfer ? (isInc(e) ? 'Looks like money from your own account' : 'Looks like a card bill or transfer') : out ? 'Outside trip dates' : '' };
   });
   const people = peopleFor(target);
-  PV = { kind: res.kind, target, rows, person: target ? (people.includes(meIn(t)) ? meIn(t) : people[0]) : (people.includes(S.lastPerson) ? S.lastPerson : people[0]) };
+  PV = { kind: res.kind, bal: res.bal, target, rows, person: target ? (people.includes(meIn(t)) ? meIn(t) : people[0]) : (people.includes(S.lastPerson) ? S.lastPerson : people[0]) };
   const nIn = rows.filter(x => isInc(x.e)).length, nOut = rows.length - nIn;
   openSheet(`<h3>${nOut ? nOut + ' spend' + (nOut > 1 ? 's' : '') : ''}${nOut && nIn ? ' and ' : ''}${nIn ? nIn + ' income' : ''} found</h3>
+    ${res.kind === 'bank' && !target ? balanceHTML(res.bal) : ''}
     <div class="muted">Adding to <b>${t ? '✈ ' + esc(t.name) : res.kind === 'csv' && rows.some(r => r.dest) ? 'personal expenses and trips in the file' : 'personal expenses'}</b>. Untick anything that isn't a real expense.</div>
     ${res.kind === 'bank' ? `<label>${nIn ? 'Paid / received by' : 'Paid by'}<select id="pvPerson">${opts(people, PV.person)}</select></label>` : ''}
     <div class="seg pvf" style="margin:12px 0 0"><button type="button" data-f="all" class="on">All <span></span></button><button type="button" data-f="on">To import <span></span></button><button type="button" data-f="off">Skipped <span></span></button></div>
@@ -1014,6 +1143,8 @@ function doImport() {
   if (PV.kind === 'bank' && !PV.target && S.lastPerson !== PV.person) { S.lastPerson = PV.person; metaChanged = true; }
   if (metaChanged) saveMeta();
   putMany(out);
+  if (PV.kind === 'bank' && PV.bal && !PV.target) { const b = PV.bal; S.stmts = (S.stmts || []).filter(x => !(x.from === b.from && x.to === b.to)); S.stmts.push({ from: b.from, to: b.to, n: b.n, ...(b.opening !== undefined ? { opening: b.opening, closing: b.closing } : {}) }); S.stmts.sort((a, c) => a.from.localeCompare(c.from)); metaChanged = true; }
+  if (metaChanged) saveMeta();
   const target = PV.target, skipped = PV.rows.length - sel.length; PV = null; closeSheet();
   toast(`Imported ${out.length}${skipped ? `, skipped ${skipped}` : ''}`, 4000);
   if (target) { curTrip = target; go('trips'); } else if (out.some(e => !e.trip)) { month = mk(out.filter(e => !e.trip).map(e => e.date).sort().pop()); go('list'); } else go('trips');
