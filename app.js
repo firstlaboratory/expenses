@@ -23,36 +23,57 @@ const catObj = e => (isInc(e) ? S.incCats : S.categories).find(c => c.name === e
 const countsOf = e => { const c = catObj(e); return (c && c.counts) || (isInc(e) ? 'income' : 'spend'); };
 // Expands raw entries into what actually counts: my share of splits, friends' shares, refunds netted
 // against a category, transfers marked as not counted, and friend paybacks beyond what they owed.
-function expand(list) {
+const memberOf = (t, who) => { if (!t || !who) return null; const w = String(who).toLowerCase().trim(), f = w.split(/\s+/)[0]; return t.members.find(m => m.toLowerCase() === w) || t.members.find(m => m.toLowerCase().split(/\s+/)[0] === f) || null; };
+const sharedTrip = e => { const t = !isInc(e) && !isFriend(e) && !hasSplit(e) && !e.tripSolo && e.tripLink && trip(e.tripLink); if (!t || t.members.length < 2) return null; const me = memberOf(t, meIn(t)); return me ? { t, me } : null; };
+function expand(list, withTrips) {
   const out = [];
   list.forEach(e => {
     const how = isFriend(e) ? '' : countsOf(e);
     if (how === 'skip') { out.push({ ...e, _skip: true }); return; }
     if (how === 'refund' && isInc(e)) { const c = catObj(e); if (c && c.against) { const x = { ...e, cat: c.against, amount: -e.amount, _ref: e.cat }; delete x.type; out.push(x); return; } }
+    const st = sharedTrip(e);
+    if (st) {   // shared trip cost I paid: only my share is my spending, the rest is owed by each member
+      const others = st.t.members.filter(m => m !== st.me), per = r2(e.amount / st.t.members.length);
+      out.push({ ...e, amount: r2(e.amount - per * others.length), _mine: true });
+      others.forEach(m => out.push({ ...e, amount: per, cat: OWE_OUT, who: m, _share: true }));
+      return;
+    }
     if (!hasSplit(e) || isFriend(e)) { out.push(e); return; }
     const m = myShare(e); if (m > 0) out.push({ ...e, amount: m, _mine: true });
     e.split.forEach(sp => out.push({ ...e, amount: sp.amount, cat: OWE_OUT, who: sp.who, _share: true }));
   });
+  // Trip costs a friend paid for the group: my share is my spending, and I owe it to them.
+  if (withTrips) S.trips.forEach(t => {
+    const me = memberOf(t, meIn(t)); if (!me || t.members.length < 2) return;
+    tripExp(t.id).forEach(x => {
+      if (x.link || x.settle || x.solo || isInc(x)) return;
+      const payer = memberOf(t, x.person); if (!payer || payer === me) return;
+      out.push({ id: x.id, trip: t.id, ts: x.ts, date: x.date, amount: r2(x.amount / t.members.length), cat: x.cat, mode: x.mode, person: S.lastPerson, note: `${x.note || x.cat} (paid by ${payer})`, who: payer, _iOwe: true });
+    });
+  });
   // Friend ledger: paybacks settle what the friend owes (oldest first); anything beyond that — or marked
   // "for shared costs" — was their share of spending I logged as mine, so it reduces my spending.
-  const fr = out.filter(e => isFriend(e) && e.who).sort((a, b) => a.date.localeCompare(b.date) || (isInc(a) - isInc(b)) || a.ts - b.ts), owed = {};
+  const fr = out.filter(e => (isFriend(e) && e.who) || e._iOwe).sort((a, b) => a.date.localeCompare(b.date) || (isInc(a) - isInc(b)) || a.ts - b.ts), owed = {};
   fr.forEach(e => {
     const w = e.who.toLowerCase();
+    if (e._iOwe) { owed[w] = r2((owed[w] || 0) - e.amount); return; }
     if (!isInc(e)) { owed[w] = (owed[w] || 0) + e.amount; return; }
-    const settle = e.forShared ? 0 : Math.min(owed[w] || 0, e.amount); owed[w] = r2((owed[w] || 0) - settle);
+    const settle = e.forShared ? 0 : Math.min(Math.max(owed[w] || 0, 0), e.amount); owed[w] = r2((owed[w] || 0) - settle);
     const extra = r2(e.amount - settle); if (extra > .004) out.push({ ...e, cat: 'Shared costs repaid', amount: extra, _shared: true });
   });
   return out;
 }
 let ownCache = null;
-const own = () => ownCache || (ownCache = expand(S.expenses));
+const own = () => ownCache || (ownCache = expand(S.expenses, true));
 function friendLedger() {
-  const fr = own().filter(e => (isFriend(e) && e.who) || e._shared).sort((a, b) => a.date.localeCompare(b.date) || (isInc(a) - isInc(b)) || a.ts - b.ts), L = {};
+  const fr = own().filter(e => (isFriend(e) && e.who) || e._shared || e._iOwe).sort((a, b) => a.date.localeCompare(b.date) || (isInc(a) - isInc(b)) || a.ts - b.ts), L = {};
   fr.forEach(e => {
-    const k = e.who.toLowerCase(), f = L[k] || (L[k] = { name: e.who, paid: 0, back: 0, shared: 0, owed: 0, list: [] });
+    const k = e.who.toLowerCase(), f = L[k] || (L[k] = { name: e.who, paid: 0, back: 0, shared: 0, theyPaid: 0, owed: 0, list: [] });
     if (e._shared) { f.shared += e.amount; return; }
     f.list.push(e);
-    if (!isInc(e)) { f.paid += e.amount; f.owed += e.amount; } else { f.back += e.amount; f.owed = Math.max(0, f.owed - (e.forShared ? 0 : e.amount)); }
+    if (e._iOwe) { f.theyPaid += e.amount; f.owed -= e.amount; }
+    else if (!isInc(e)) { f.paid += e.amount; f.owed += e.amount; }
+    else { f.back += e.amount; f.owed -= e.forShared ? 0 : Math.min(Math.max(f.owed, 0), e.amount); }
   });
   Object.values(L).forEach(f => { f.owed = r2(f.owed); });
   return L;
@@ -110,7 +131,7 @@ function normalize(b) {
   out.rules = (Array.isArray(b.rules) ? b.rules : []).filter(r => r && r.k).map(r => ({ k: String(r.k), cat: cn(r.cat), ...(r.who ? { who: String(r.who) } : {}) }));
   const splitOf_ = e => Array.isArray(e.split) && e.split.length ? { split: e.split.filter(x => x && x.who && +x.amount > 0).map(x => ({ who: String(x.who), amount: r2(+x.amount), ...(+x.shares ? { shares: +x.shares } : {}) })), splitBy: e.splitBy === 'amount' ? 'amount' : 'shares', meShares: +e.meShares >= 0 ? +e.meShares : 1 } : {};
   const splitOf = splitOf_;
-  const fixE = e => ({ id: String(e.id || uid()), ts: +e.ts || Date.now(), date: String(e.date), amount: r2(+e.amount), cat: cn(e.cat), mode: MODES.includes(e.mode) ? e.mode : 'UPI', person: String(e.person || 'Me'), note: String(e.note || ''), ...(e.type === 'in' ? { type: 'in' } : {}), ...(e.who ? { who: String(e.who) } : {}), ...(e.reviewed ? { reviewed: true } : {}), ...(e.forShared ? { forShared: true } : {}), ...(e.tripLink ? { tripLink: String(e.tripLink) } : {}), ...(e.tripSolo ? { tripSolo: true } : {}), ...(e.link ? { link: String(e.link) } : {}), ...(e.solo ? { solo: true } : {}), ...splitOf(e) });
+  const fixE = e => ({ id: String(e.id || uid()), ts: +e.ts || Date.now(), date: String(e.date), amount: r2(+e.amount), cat: cn(e.cat), mode: MODES.includes(e.mode) ? e.mode : 'UPI', person: String(e.person || 'Me'), note: String(e.note || ''), ...(e.type === 'in' ? { type: 'in' } : {}), ...(e.who ? { who: String(e.who) } : {}), ...(e.reviewed ? { reviewed: true } : {}), ...(e.forShared ? { forShared: true } : {}), ...(e.tripLink ? { tripLink: String(e.tripLink) } : {}), ...(e.tripSolo ? { tripSolo: true } : {}), ...(e.link ? { link: String(e.link) } : {}), ...(e.solo ? { solo: true } : {}), ...(e.settle ? { settle: true, from: String(e.from || ''), to: String(e.to || '') } : {}), ...splitOf(e) });
   const ok = e => e && /^\d{4}-\d{2}-\d{2}$/.test(e.date) && +e.amount > 0;
   out.expenses = (b.expenses || []).filter(ok).map(fixE);
   (b.trips || []).forEach(t => {
@@ -147,7 +168,7 @@ const catName = n => ([...S.categories, ...S.incCats].find(c => c.name.toLowerCa
 // ================= data writes (local or cloud) =================
 function track(p) { pending++; schedule(); return p.catch(fail).finally(() => { pending--; schedule(); }); }
 function fail(err) { console.error(err); const c = err && err.code || ''; toast(/permission/.test(c) ? 'Not allowed — check Firestore rules' : 'Sync error: ' + (c || err.message), 4500); }
-function strip(e) { const o = { date: e.date, amount: e.amount, cat: e.cat, mode: e.mode, person: e.person, note: e.note || '', ts: e.ts || Date.now() }; if (isInc(e)) o.type = 'in'; if (e.who) o.who = e.who; if (e.reviewed) o.reviewed = true; if (e.forShared && isFriend(e)) o.forShared = true; if (hasSplit(e)) { o.split = e.split; o.splitBy = e.splitBy || 'shares'; o.meShares = e.meShares ?? 1; } if (e.trip) o.trip = e.trip; if (e.tripLink && !e.trip) { o.tripLink = e.tripLink; if (e.tripSolo) o.tripSolo = true; } if (e.link) o.link = e.link; if (e.solo) o.solo = true; if (cloud) o.by = user.uid; return o; }
+function strip(e) { const o = { date: e.date, amount: e.amount, cat: e.cat, mode: e.mode, person: e.person, note: e.note || '', ts: e.ts || Date.now() }; if (isInc(e)) o.type = 'in'; if (e.who) o.who = e.who; if (e.reviewed) o.reviewed = true; if (e.forShared && isFriend(e)) o.forShared = true; if (hasSplit(e)) { o.split = e.split; o.splitBy = e.splitBy || 'shares'; o.meShares = e.meShares ?? 1; } if (e.trip) o.trip = e.trip; if (e.tripLink && !e.trip) { o.tripLink = e.tripLink; if (e.tripSolo) o.tripSolo = true; } if (e.link) o.link = e.link; if (e.solo) o.solo = true; if (e.settle) { o.settle = true; o.from = e.from || ''; o.to = e.to || ''; } if (cloud) o.by = user.uid; return o; }
 function eRef(e) { const F = fb.F; return e.trip ? F.doc(fb.db, 'trips', e.trip, 'expenses', e.id) : F.doc(fb.db, 'users', user.uid, 'expenses', e.id); }
 function collOf(e) { if (!e.trip) return S.expenses; return TE[e.trip] || (TE[e.trip] = []); }
 function localPut(e) { const c = collOf(e), i = c.findIndex(x => x.id === e.id); if (i >= 0) c[i] = e; else c.push(e); }
@@ -157,9 +178,13 @@ function markReviewed(e) { const o = findExp(e.id, e.trip); if (o && o.cat !== e
 // spending and in the trip's total/settle-up. Edits always go through the personal entry.
 function mirrorOps(e, old, deleting) {
   if (e.trip || e.link) return [];
-  const ops = [], was = old && old.tripLink, now = !deleting && !isInc(e) && e.tripLink && trip(e.tripLink) ? e.tripLink : '';
+  const ops = [], was = old && old.tripLink, now = !deleting && (!isInc(e) || isFriend(e)) && e.tripLink && trip(e.tripLink) ? e.tripLink : '';
   if (was && was !== now && trip(was)) ops.push(['del', { id: 'L' + e.id, trip: was }]);
-  if (now) { const t = trip(now); ops.push(['put', { id: 'L' + e.id, trip: now, link: e.id, ts: e.ts, date: e.date, amount: e.amount, cat: e.cat, mode: e.mode, person: meIn(t), note: e.note || '', ...(e.tripSolo ? { solo: true } : {}) }]); }
+  if (now) {
+    const t = trip(now), me = meIn(t), base = { id: 'L' + e.id, trip: now, link: e.id, ts: e.ts, date: e.date, amount: e.amount, cat: e.cat, mode: e.mode, person: me, note: e.note || '' };
+    if (isFriend(e)) { const f = memberOf(t, e.who) || e.who || ''; ops.push(['put', { ...base, settle: true, ...(isInc(e) ? { from: f, to: me } : { from: me, to: f }) }]); }   // payback between members
+    else ops.push(['put', { ...base, ...(e.tripSolo ? { solo: true } : {}) }]);
+  }
   return ops;
 }
 function applyOps(ops, batch) { ops.forEach(([op, m]) => { if (op === 'put') localPut(m); else localDel(m); if (cloud) { const r = eRef(m); if (batch) op === 'put' ? batch.set(r, strip(m)) : batch.delete(r); else track(op === 'put' ? fb.F.setDoc(r, strip(m)) : fb.F.deleteDoc(r)); } }); }
@@ -239,7 +264,7 @@ function startCloud() {
     schedule();
   }, fail));
 }
-function normalizeE(d) { const x = d.data(); return { id: d.id, ts: +x.ts || 0, date: x.date, amount: +x.amount, cat: x.cat || 'Other', mode: x.mode || 'UPI', person: x.person || '', note: x.note || '', by: x.by, ...(x.type === 'in' ? { type: 'in' } : {}), ...(x.who ? { who: x.who } : {}), ...(x.reviewed ? { reviewed: true } : {}), ...(x.forShared ? { forShared: true } : {}), ...(x.tripLink ? { tripLink: x.tripLink } : {}), ...(x.tripSolo ? { tripSolo: true } : {}), ...(x.link ? { link: x.link } : {}), ...(x.solo ? { solo: true } : {}), ...(Array.isArray(x.split) && x.split.length ? { split: x.split, splitBy: x.splitBy || 'shares', meShares: x.meShares ?? 1 } : {}) }; }
+function normalizeE(d) { const x = d.data(); return { id: d.id, ts: +x.ts || 0, date: x.date, amount: +x.amount, cat: x.cat || 'Other', mode: x.mode || 'UPI', person: x.person || '', note: x.note || '', by: x.by, ...(x.type === 'in' ? { type: 'in' } : {}), ...(x.who ? { who: x.who } : {}), ...(x.reviewed ? { reviewed: true } : {}), ...(x.forShared ? { forShared: true } : {}), ...(x.tripLink ? { tripLink: x.tripLink } : {}), ...(x.tripSolo ? { tripSolo: true } : {}), ...(x.link ? { link: x.link } : {}), ...(x.solo ? { solo: true } : {}), ...(x.settle ? { settle: true, from: x.from || '', to: x.to || '' } : {}), ...(Array.isArray(x.split) && x.split.length ? { split: x.split, splitBy: x.splitBy || 'shares', meShares: x.meShares ?? 1 } : {}) }; }
 function migrateLocal(fresh) {
   if (migrated) return; migrated = true;
   const L = loadLocal(); if (!L) return;
@@ -317,11 +342,11 @@ const opts = (list, sel) => list.map(p => `<option ${p === sel ? 'selected' : ''
 function itemHTML(e, showDay) {
   const c = cat(e.cat), t = (e.trip && trip(e.trip)) || (e.tripLink && trip(e.tripLink)), spl = !e._mine && !e._share && hasSplit(e);
   const sm = multi && view === 'list', on = sm && picked.has(e.id);
-  return `<div class="item${on ? ' picked' : ''}" data-id="${esc(e.id)}" data-trip="${e.trip || ''}">${sm ? `<span class="tick">${on ? '✓' : ''}</span>` : ''}<div class="ic" ${sm ? '' : 'data-ic="1"'} style="background:${c.color}22">${c.icon}</div><div class="mid"><div class="t">${esc(e.note || c.name)}</div><div class="s">${esc(c.name)}${e.who ? (isInc(e) ? ' from ' : ' · ') + esc(e.who) : ''}${spl ? ` · <span class="splt">➗ you ${money(myShare(e))}</span>` : e._mine ? ' · your share' : e._share ? ' · split share' : ''}${e.forShared && isInc(e) ? ' · shared costs' : ''}${!isFriend(e) && countsOf(e) === 'skip' ? ' · not counted' : ''} · ${e.mode} · ${esc(e.person)}${t && view !== 'trips' ? ' · ✈ ' + esc(t.name) : ''}${e.link ? (findExp(e.link, '') ? ' · 🔗 from your expenses' : ' · 🔗 from their expenses') : ''}${e.solo || (e.tripLink && e.tripSolo && view !== 'trips') ? ' · just mine' : ''}${showDay ? ' · ' + dayLabel(e.date) : ''}</div></div><div class="a${isInc(e) ? ' inc' : ''}">${isInc(e) ? '+' : ''}${money(e.amount)}</div></div>`;
+  return `<div class="item${on ? ' picked' : ''}" data-id="${esc(e.id)}" data-trip="${e.trip || ''}">${sm ? `<span class="tick">${on ? '✓' : ''}</span>` : ''}<div class="ic" ${sm ? '' : 'data-ic="1"'} style="background:${c.color}22">${c.icon}</div><div class="mid"><div class="t">${esc(e.note || c.name)}</div><div class="s">${esc(c.name)}${e.who ? (isInc(e) ? ' from ' : ' · ') + esc(e.who) : ''}${spl ? ` · <span class="splt">➗ you ${money(myShare(e))}</span>` : e._mine ? ' · your share' : e._share ? ' · split share' : ''}${e.forShared && isInc(e) ? ' · shared costs' : ''}${!isFriend(e) && countsOf(e) === 'skip' ? ' · not counted' : ''} · ${e.mode} · ${esc(e.person)}${t && view !== 'trips' ? ' · ✈ ' + esc(t.name) : ''}${e.settle ? ` · ↔ ${esc(e.from)} paid ${esc(e.to)} back` : ''}${e._iOwe ? ' · your share' : ''}${e.link ? (findExp(e.link, '') ? ' · 🔗 from your expenses' : ' · 🔗 from their expenses') : ''}${e.solo || (e.tripLink && e.tripSolo && view !== 'trips') ? ' · just mine' : ''}${showDay ? ' · ' + dayLabel(e.date) : ''}</div></div><div class="a${isInc(e) ? ' inc' : ''}">${isInc(e) ? '+' : ''}${money(e.amount)}</div></div>`;
 }
 function groupedHTML(rows) {
   const g = {}; rows.forEach(e => (g[e.date] = g[e.date] || []).push(e));
-  return Object.keys(g).sort().reverse().map(d => { const o = sum(g[d].filter(e => !isInc(e))), i = sum(g[d].filter(isInc)); return `<div class="day"><span>${dayLabel(d)}</span><span>${o ? money(o) : ''}${o && i ? ' · ' : ''}${i ? '<span class="inc">+' + money(i) + '</span>' : ''}</span></div><div class="card" style="padding:2px 14px">${g[d].sort((a, b) => b.ts - a.ts).map(e => itemHTML(e)).join('')}</div>`; }).join('');
+  return Object.keys(g).sort().reverse().map(d => { const o = sum(g[d].filter(e => !isInc(e) && !e.settle)), i = sum(g[d].filter(e => isInc(e) && !e.settle)); return `<div class="day"><span>${dayLabel(d)}</span><span>${o ? money(o) : ''}${o && i ? ' · ' : ''}${i ? '<span class="inc">+' + money(i) + '</span>' : ''}</span></div><div class="card" style="padding:2px 14px">${g[d].sort((a, b) => b.ts - a.ts).map(e => itemHTML(e)).join('')}</div>`; }).join('');
 }
 document.addEventListener('click', ev => {
   const it = ev.target.closest('.item[data-id]'); if (!it) return;
@@ -368,8 +393,8 @@ $('#splitList').addEventListener('click', e => {
 });
 $('#splitList').addEventListener('input', e => { const i = e.target.dataset.si; if (i === undefined) return; const r = SPL.rows[+i]; if (e.target.dataset.sk === 'who') r.who = e.target.value; else r.amount = r2(parseFloat(e.target.value) || 0); renderSplit(false); });
 $('#amt').addEventListener('input', () => renderSplit(false));
-$('#fFor').addEventListener('change', () => { renderSplit(true); $('#linkWrap').classList.toggle('hidden', selType === 'in' || !!$('#fFor').value || !S.trips.length); $('#soloWrap').classList.toggle('hidden', $('#linkWrap').classList.contains('hidden') || !$('#fLink').value); });
-$('#fLink').addEventListener('change', () => $('#soloWrap').classList.toggle('hidden', !$('#fLink').value));
+$('#fFor').addEventListener('change', () => { renderSplit(true); renderAdd(); });
+$('#fLink').addEventListener('change', () => $('#soloWrap').classList.toggle('hidden', !$('#fLink').value || selType === 'in' || selCat === OWE_OUT));
 function splitFromForm() {
   if (!SPL.on || !splitAllowed()) return { ok: true, data: null };
   const c = splitCalc(), rows = SPL.rows.map(r => ({ ...r, who: r.who.trim() })).filter(r => r.who || r.amount);
@@ -450,8 +475,9 @@ function renderAdd() {
   $$('#typeSeg button').forEach(b => b.classList.toggle('on', b.dataset.t === selType));
   $('#forWrap').classList.toggle('hidden', inc); if (inc) $('#fFor').value = '';
   const lv = $('#fLink').value; $('#fLink').innerHTML = '<option value="">No</option>' + tripsSorted().map(t => `<option value="${t.id}" ${t.id === lv ? 'selected' : ''}>✈ ${esc(t.name)}</option>`).join('');
-  $('#linkWrap').classList.toggle('hidden', inc || !!$('#fFor').value || !S.trips.length);
-  $('#soloWrap').classList.toggle('hidden', $('#linkWrap').classList.contains('hidden') || !$('#fLink').value);
+  $('#linkWrap').classList.toggle('hidden', (inc && cur !== OWE_IN) || !!$('#fFor').value || !S.trips.length);
+  $('#linkLbl').textContent = cur === OWE_IN || cur === OWE_OUT ? 'Payback for a trip?' : 'Also show in a trip';
+  $('#soloWrap').classList.toggle('hidden', $('#linkWrap').classList.contains('hidden') || !$('#fLink').value || cur === OWE_IN || cur === OWE_OUT);
   $('#personLbl').textContent = inc ? 'Received by' : 'Paid by';
   $('#amtSign').textContent = inc ? '+₹' : '₹';
   $('#note').placeholder = inc ? 'Where is it from?' : 'What was it for?';
@@ -498,7 +524,7 @@ $('#f').onsubmit = ev => {
   const who = $('#who').value.trim();
   if (data.cat === OWE_OUT || data.cat === OWE_IN) { if (!who) { $('#who').focus(); return toast("Enter your friend's name"); } data.who = who; }
   const sp = splitFromForm(); if (!sp.ok) return toast(sp.msg, 3500); if (sp.data) Object.assign(data, sp.data);
-  if (!inc && !forT && $('#fLink').value) { data.tripLink = $('#fLink').value; if ($('#fSolo').checked) data.tripSolo = true; }
+  if ((!inc || data.cat === OWE_IN) && !forT && $('#fLink').value) { data.tripLink = $('#fLink').value; if (!isFriend(data) && $('#fSolo').checked) data.tripSolo = true; }
   if (forT && !inc) { const t = trip(forT); if (t && data.person === meIn(t)) { data.tripLink = forT; data.person = S.people.includes(S.lastPerson) ? S.lastPerson : S.people[0]; return saveForm(data, '', inc); } }
   return saveForm(data, forT, inc);
 };
@@ -564,15 +590,15 @@ $('#selBar').onclick = ev => {
     case 'note': return bulkNote(sel);
     case 'cat': return bulkCat(sel);
     case 'trip': {
-      const spends = sel.filter(e => !isInc(e)); if (!spends.length) return toast('Select spends to add to a trip');
+      const spends = sel.filter(e => !isInc(e) || e.cat === OWE_IN); if (!spends.length) return toast('Select spends (or friend paybacks) to add to a trip');
       if (!S.trips.length) return toast('Create a trip first (Trips tab)');
       return openSheet(`<h3>Show ${spends.length} spend${spends.length > 1 ? 's' : ''} in a trip</h3><p class="muted" style="margin-top:2px">They stay in your spending and also count in the trip's total and settle-up. Edit them here — the trip updates too.</p>
         <div class="seg" id="tpSolo" style="margin:12px 0 0"><button type="button" data-solo="0" class="on">Shared with the group</button><button type="button" data-solo="1">Just my cost</button></div>
-        <p class="muted" id="tpTxt" style="margin:6px 0 0">Split in the trip's settle-up, e.g. a hotel or cab you paid for everyone.</p>
+        <p class="muted" id="tpTxt" style="margin:6px 0 0">Split in the trip's settle-up, e.g. a hotel or cab you paid for everyone.</p>${spends.some(isFriend) ? '<p class="muted" style="margin:6px 0 0">🤝 Friend paybacks are recorded as settling up in the trip.</p>' : ''}
         <div class="chips" style="margin-top:10px">${tripsSorted().map(t => `<button class="chip" data-tp="${t.id}">✈ ${esc(t.name)}</button>`).join('')}<button class="chip" data-tp="">✕ Not in a trip</button></div>`, ev => {
         const so = ev.target.closest('[data-solo]'); if (so) { $$('#tpSolo button').forEach(x => x.classList.toggle('on', x === so)); $('#tpTxt').textContent = so.dataset.solo === '1' ? "Counts in the trip total but isn't split, e.g. your own trek fee or train ticket." : "Split in the trip's settle-up, e.g. a hotel or cab you paid for everyone."; return; }
         const b = ev.target.closest('[data-tp]'); if (!b) return; const id = b.dataset.tp, solo = $('#tpSolo [data-solo="1"]').classList.contains('on');
-        putMany(spends.map(e => { const x = { ...e }; if (id) { x.tripLink = id; if (solo) x.tripSolo = true; else delete x.tripSolo; } else { delete x.tripLink; delete x.tripSolo; } return x; })); closeSheet(); setSelMode(false);
+        putMany(spends.map(e => { const x = { ...e }; if (id) { x.tripLink = id; if (solo && !isFriend(e)) x.tripSolo = true; else delete x.tripSolo; } else { delete x.tripLink; delete x.tripSolo; } return x; })); closeSheet(); setSelMode(false);
         toast(id ? `${spends.length} added to ${trip(id).name}` : 'Removed from trip');
       });
     }
@@ -640,13 +666,15 @@ function bulkCat(sel) {
 
 // ---------- Trips ----------
 function settle(t) {
-  const all = tripExp(t.id), ex = all.filter(e => !e.solo), tot = sum(all), mem = t.members.length ? t.members : [myName()], share = sum(ex) / mem.length;
-  const paid = {}; mem.forEach(p => paid[p] = 0); ex.forEach(e => paid[e.person] = (paid[e.person] || 0) + e.amount);
-  const bal = Object.keys(paid).map(p => ({ p, b: paid[p] - (mem.includes(p) ? share : 0) }));
+  const all = tripExp(t.id), costs = all.filter(e => !e.settle), ex = costs.filter(e => !e.solo), pays = all.filter(e => e.settle), tot = sum(costs), mem = t.members.length ? t.members : [myName()], share = sum(ex) / mem.length;
+  const paid = {}; mem.forEach(p => paid[p] = 0); ex.forEach(e => { const p = memberOf(t, e.person) || e.person; paid[p] = (paid[p] || 0) + e.amount; });
+  const net = { ...paid }; let settled = 0;
+  pays.forEach(e => { const f = memberOf(t, e.from), to = memberOf(t, e.to); if (f && to && f !== to) { net[f] += e.amount; net[to] -= e.amount; settled += e.amount; } });
+  const bal = Object.keys(net).map(p => ({ p, b: r2(net[p] - (mem.includes(p) ? share : 0)) }));
   const cr = bal.filter(x => x.b > .5).sort((a, b) => b.b - a.b).map(x => ({ ...x })), db = bal.filter(x => x.b < -.5).map(x => ({ p: x.p, b: -x.b })).sort((a, b) => b.b - a.b);
   const tx = []; let i = 0, j = 0;
   while (i < db.length && j < cr.length) { const v = Math.min(db[i].b, cr[j].b); tx.push([db[i].p, cr[j].p, v]); db[i].b -= v; cr[j].b -= v; if (db[i].b < .5) i++; if (cr[j].b < .5) j++; }
-  return { tot, share, paid, tx, mem, solo: sum(all.filter(e => e.solo)) };
+  return { tot, share, paid, bal: Object.fromEntries(bal.map(x => [x.p, x.b])), tx, mem, settled, solo: sum(costs.filter(e => e.solo)), costs };
 }
 function renderTrips() {
   const t = curTrip && trip(curTrip); // a just-joined trip may arrive a moment later, so keep curTrip
@@ -656,12 +684,12 @@ function tripListHTML() {
   const banner = configured && authKnown && !user ? `<div class="banner">Sign in (Settings) to share trips live — everyone on the trip adds expenses from their own phone.</div>` : '';
   const list = tripsSorted();
   return banner + `<button class="primary" data-act="new" style="margin:0 0 12px">＋ New trip</button>` + (list.length ? list.map(t => {
-    const ex = tripExp(t.id), tot = sum(ex), p = t.budget ? tot / t.budget : 0;
+    const ex = tripExp(t.id).filter(e => !e.settle), tot = sum(ex), p = t.budget ? tot / t.budget : 0;
     return `<div class="card trip" data-act="open" data-trip="${t.id}"><div class="row"><div><b style="font-size:16px">✈ ${esc(t.name)}</b><div class="muted">${t.start ? niceDate(t.start) + ' – ' + niceDate(t.end) + ' · ' : ''}${t.members.length} ${t.members.length > 1 ? 'people' : 'person'} · ${ex.length} expenses</div></div><div class="a" style="text-align:right;flex:0 0 auto">${money(tot)}</div></div>${t.budget ? `<div class="bar"><i style="width:${Math.min(100, p * 100)}%;background:${barColor(p)}"></i></div>` : ''}</div>`;
   }).join('') : '<div class="empty">No trips yet. Create one, then upload statements or add expenses to it.</div>');
 }
 function tripDetailHTML(t) {
-  const ex = tripExp(t.id), st = settle(t), p = t.budget ? st.tot / t.budget : 0;
+  const all = tripExp(t.id), st = settle(t), ex = st.costs, p = t.budget ? st.tot / t.budget : 0;
   const byCat = {}; ex.forEach(e => byCat[e.cat] = (byCat[e.cat] || 0) + e.amount);
   const cats = Object.keys(byCat).sort((a, b) => byCat[b] - byCat[a]);
   return `<button class="link" data-act="back">‹ All trips</button>
@@ -672,11 +700,11 @@ function tripDetailHTML(t) {
     <div class="btns" style="margin:8px 0 0"><button data-act="add">✎ Add manually</button><button data-act="csv">⬇ Download CSV</button></div>
     ${cloud ? '<button data-act="invite" style="width:100%;margin-top:8px">👥 Invite people</button>' : ''}</div>
   ${st.mem.length > 1 ? `<div class="card"><div class="label" style="margin-top:0">Settle up</div>
-    ${Object.keys(st.paid).map(n => `<div class="settle"><span>${esc(n)} paid ${money(st.paid[n])}</span><b class="${st.paid[n] - (st.mem.includes(n) ? st.share : 0) >= 0 ? 'down' : 'up'}">${(st.paid[n] - (st.mem.includes(n) ? st.share : 0)) >= 0 ? '+' : '−'}${money(Math.abs(st.paid[n] - (st.mem.includes(n) ? st.share : 0)))}</b></div>`).join('')}
+    ${Object.keys(st.paid).map(n => { const b = st.bal[n] || 0; return `<div class="settle"><span>${esc(n)} paid ${money(st.paid[n])}</span><b class="${b >= 0 ? 'down' : 'up'}">${Math.abs(b) < .5 ? 'settled ✓' : (b > 0 ? 'gets back ' : 'owes ') + money(Math.abs(b))}</b></div>`; }).join('')}
     <div class="label">Who pays whom</div>${st.tx.length ? st.tx.map(([a, b, v]) => `<div class="settle"><span>${esc(a)} → ${esc(b)}</span><b>${money(v)}</b></div>`).join('') : '<div class="muted">All settled 🎉</div>'}
-    <p class="muted" style="margin-bottom:0">Split equally among ${st.mem.length} people.${st.solo ? ` ${money(st.solo)} marked “just mine” isn't split.` : ''}</p></div>` : ''}
+    <p class="muted" style="margin-bottom:0">Split equally among ${st.mem.length} people.${st.solo ? ` ${money(st.solo)} marked “just mine” isn't split.` : ''}${st.settled ? ` ${money(st.settled)} already paid back.` : ''}</p></div>` : ''}
   ${cats.length ? `<div class="card"><div class="label" style="margin-top:0">By category</div>${cats.map(n => { const c = cat(n); return `<div style="margin:6px 0"><div class="row"><span>${c.icon} ${esc(n)}</span><b style="text-align:right">${money(byCat[n])}</b></div><div class="bar"><i style="width:${byCat[n] / st.tot * 100}%;background:${c.color}"></i></div></div>`; }).join('')}</div>` : ''}
-  ${ex.length ? groupedHTML(ex) : '<div class="empty">No expenses in this trip yet.</div>'}`;
+  ${all.length ? groupedHTML(all) : '<div class="empty">No expenses in this trip yet.</div>'}`;
 }
 $('#tripsBox').onclick = ev => {
   const a = ev.target.closest('[data-act]'); if (!a) return;
@@ -859,26 +887,40 @@ function renderRecurring() {
 }
 document.addEventListener('click', ev => { const r = ev.target.closest('[data-rec]'); if (r) { go('list'); pmode = 'year'; $('#fType').value = ''; $('#fCat').value = ''; $('#fPerson').value = ''; $('#fSearch').value = r.dataset.rec; render(); } });
 // ================= income tax estimate (India, FY Apr–Mar) =================
-// FY 2026-27 rules: new regime slabs 0–4L nil, 5/10/15/20/25/30% per ₹4L, ₹75k standard deduction, rebate up to ₹60k
-// (no tax on slab income up to ₹12L) with marginal relief; old regime 2.5L/5L/10L slabs, ₹50k SD, ₹12.5k rebate up to ₹5L.
-// Equity STCG 20%, LTCG 12.5% above ₹1.25L; 4% cess. Surcharge (income > ₹50L) is not modelled.
+// Rules per FY come from tax-rules.json (slabs, standard deduction, 87A rebate, cess, capital-gains rates).
+// Surcharge (income > ₹50L) is not modelled.
+const dateY = d => { const [y, m, dd] = String(d).split('-').map(Number); return new Date(y, m - 1, dd).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }); };
 const fyOf = m => { const [y, mo] = m.split('-').map(Number); return mo >= 4 ? y : y - 1; };
 const fyLabel = y => `FY ${y}-${String(y + 1).slice(2)}`;
-function slabTax(x, slabs) { let t = 0, lo = 0; for (const [hi, r] of slabs) { if (x > lo) t += (Math.min(x, hi) - lo) * r; lo = hi; } return t; }
-const NEW_SLABS = [[4e5, 0], [8e5, .05], [12e5, .10], [16e5, .15], [20e5, .20], [24e5, .25], [Infinity, .30]];
-const OLD_SLABS = [[2.5e5, 0], [5e5, .05], [10e5, .20], [Infinity, .30]];
-function taxCalc(regime, d) {
-  const isNew = regime === 'new', sd = d.gross > 0 ? Math.min(d.gross, isNew ? 75000 : 50000) : 0;
+function slabTax(x, slabs) { let t = 0, lo = 0; for (const [hi, r] of slabs) { const top = hi == null ? Infinity : hi; if (x > lo) t += (Math.min(x, top) - lo) * r; lo = top; } return t; }
+// Tax rules live in tax-rules.json (one entry per FY); this copy is the offline fallback.
+const BUILTIN_RULES = { updated: '2026-11-07', years: { 2026: { new: { slabs: [[4e5, 0], [8e5, .05], [12e5, .10], [16e5, .15], [20e5, .20], [24e5, .25], [null, .30]], sd: 75000, rebateLimit: 12e5, rebateMax: 60000 }, old: { slabs: [[2.5e5, 0], [5e5, .05], [10e5, .20], [null, .30]], sd: 50000, rebateLimit: 5e5, rebateMax: 12500, c80: 150000, homeLoan: 200000, nps: 50000, savingsInterest: 10000 }, cess: .04, stcg: .20, ltcg: .125, ltcgExempt: 125000, advanceTaxAbove: 10000 } } };
+let TAXR = (() => { try { const c = JSON.parse(localStorage.getItem('trickle_taxrules')); if (c && c.years) return c; } catch (e) {} return BUILTIN_RULES; })(), taxFetched = false;
+async function fetchTaxRules(manual) {
+  try {
+    const r = await fetch('tax-rules.json?t=' + Date.now(), { cache: 'no-store' }); if (!r.ok) throw new Error('HTTP ' + r.status);
+    const j = await r.json(); if (!j || !j.years) throw new Error('bad file');
+    const changed = JSON.stringify(j.years) !== JSON.stringify(TAXR.years); TAXR = j; taxFetched = true;
+    try { localStorage.setItem('trickle_taxrules', JSON.stringify(j)); } catch (e) {}
+    if (manual) toast(changed ? `New tax rules loaded (updated ${dateY(j.updated)}) — recalculated` : `Tax rules are up to date (${dateY(j.updated)})`, 3500);
+    if (view === 'stats') renderTax();
+  } catch (e) { taxFetched = true; if (manual) toast("Couldn't refresh tax rules — using the saved ones", 3500); }
+}
+function rulesFor(fy) {
+  const ys = Object.keys(TAXR.years).map(Number).sort((a, b) => a - b);
+  const use = ys.filter(y => y <= fy).pop() ?? ys[0];
+  return { R: TAXR.years[use], year: use, exact: use === fy };
+}
+function taxCalc(regime, d, R = rulesFor(2026).R) {
+  const isNew = regime === 'new', g = isNew ? R.new : R.old, sd = d.gross > 0 ? Math.min(d.gross, g.sd) : 0;
   let ded = 0;
-  if (!isNew) ded = Math.min(+d.c80 || 0, 150000) + (+d.d80 || 0) + (+d.hra || 0) + Math.min(+d.home || 0, 200000) + Math.min(+d.nps || 0, 50000) + Math.min(d.interest, 10000) + (+d.other || 0);
+  if (!isNew) ded = Math.min(+d.c80 || 0, g.c80) + (+d.d80 || 0) + (+d.hra || 0) + Math.min(+d.home || 0, g.homeLoan) + Math.min(+d.nps || 0, g.nps) + Math.min(d.interest, g.savingsInterest) + (+d.other || 0);
   const normal = Math.max(0, d.gross - sd + d.dividend + d.interest + d.otherInc - ded);
-  const stcg = Math.max(0, +d.stcg || 0), ltcg = Math.max(0, (+d.ltcg || 0) - 125000), total = normal + stcg + (+d.ltcg || 0);
-  let slab = slabTax(normal, isNew ? NEW_SLABS : OLD_SLABS), rebate = 0;
-  if (isNew) {
-    if (total <= 12e5) rebate = Math.min(slab, 60000);
-    else if (normal > 12e5 && slab > normal - 12e5) rebate = slab - (normal - 12e5);   // marginal relief just above ₹12L
-  } else if (total <= 5e5) rebate = Math.min(slab, 12500);
-  const cg = stcg * .20 + ltcg * .125, base = Math.max(0, slab - rebate) + cg, cess = base * .04;
+  const stcg = Math.max(0, +d.stcg || 0), ltcg = Math.max(0, (+d.ltcg || 0) - R.ltcgExempt), total = normal + stcg + (+d.ltcg || 0);
+  let slab = slabTax(normal, g.slabs), rebate = 0;
+  if (total <= g.rebateLimit) rebate = Math.min(slab, g.rebateMax);
+  else if (isNew && normal > g.rebateLimit && slab > normal - g.rebateLimit) rebate = slab - (normal - g.rebateLimit);   // marginal relief just above the limit
+  const cg = stcg * R.stcg + ltcg * R.ltcg, base = Math.max(0, slab - rebate) + cg, cess = base * R.cess;
   return { sd, ded, normal, stcg, ltcg, slab: r2(slab), rebate: r2(rebate), cg: r2(cg), cess: r2(cess), tax: Math.round(base + cess) };
 }
 const TAXPAY_RE = /cbdt|income ?tax|advance ?tax|self ?assess|itns|tin ?2/i;
@@ -901,13 +943,13 @@ function renderTax() {
   const paid = r2((+I.tds || 0) + sum(D.pays.filter(e => (I.paid || []).includes(e.id))));
   const d = { gross: gross || projTake, dividend: I.dividend !== undefined && I.dividend !== '' ? +I.dividend : D.dividend, interest: I.interest !== undefined && I.interest !== '' ? +I.interest : D.interest, otherInc: I.otherInc !== undefined && I.otherInc !== '' ? +I.otherInc : 0, stcg: +I.stcg || 0, ltcg: +I.ltcg || 0, c80: +I.c80 || 0, d80: +I.d80 || 0, hra: +I.hra || 0, home: +I.home || 0, nps: +I.nps || 0, other: +I.other || 0 };
   if (!d.gross && !d.dividend && !d.interest) { box.innerHTML = `<div class="muted">${fyLabel(fy)}: no salary or income found yet. Tap <b>Enter details</b> to add your gross salary from your payslip.</div><button class="small" data-tax="edit" style="margin-top:8px">Enter details</button>`; return; }
-  const N = taxCalc('new', d), O = taxCalc('old', d), best = N.tax <= O.tax ? 'new' : 'old', B = best === 'new' ? N : O, due = Math.round(B.tax - paid);
+  const RU = rulesFor(fy), N = taxCalc('new', d, RU.R), O = taxCalc('old', d, RU.R), best = N.tax <= O.tax ? 'new' : 'old', B = best === 'new' ? N : O, due = Math.round(B.tax - paid);
   const left = Math.max(0, 12 - elapsed), perMonth = due > 0 && left ? Math.ceil(due / left / 100) * 100 : 0;
   const row = (a, b, cls = '') => `<div class="settle ${cls}"><span>${a}</span><b>${String(b).replace(/\.\d+$/, '')}</b></div>`;
   box.innerHTML = `<div class="muted">${fyLabel(fy)} · estimate${rough ? ' (rough — uses your take-home pay)' : ''}</div>
     <div class="big" style="font-size:26px">${money(B.tax)} <span class="muted" style="font-size:14px;font-weight:400">tax for the year · ${best} regime</span></div>
     <div class="muted">${best === 'new' ? 'New' : 'Old'} regime saves ${money(Math.abs(O.tax - N.tax))} (new ${money(N.tax)} · old ${money(O.tax)})</div>
-    <div class="chk ${due > 0 ? 'bad' : 'ok'}" style="margin-top:10px">${paid ? `Paid so far ${money(paid)} (TDS${(I.paid || []).length ? ' + tax payments' : ''}). ` : 'No TDS entered yet. '}${due > 0 ? `<b>${money(due)} more to pay</b>${perMonth ? ` — set aside about ${money(perMonth)} a month` : ''}.${due > 10000 && elapsed < 12 ? ' Above ₹10,000, advance tax is due in instalments (15 Jun, 15 Sep, 15 Dec, 15 Mar) unless your employer deducts it.' : ''}` : due < 0 ? `<b>About ${money(-due)} refund</b> when you file.` : '<b>All covered.</b>'}</div>
+    <div class="chk ${due > 0 ? 'bad' : 'ok'}" style="margin-top:10px">${paid ? `Paid so far ${money(paid)} (TDS${(I.paid || []).length ? ' + tax payments' : ''}). ` : 'No TDS entered yet. '}${due > 0 ? `<b>${money(due)} more to pay</b>${perMonth ? ` — set aside about ${money(perMonth)} a month` : ''}.${due > (RU.R.advanceTaxAbove || 10000) && elapsed < 12 ? ' Above ₹10,000, advance tax is due in instalments (15 Jun, 15 Sep, 15 Dec, 15 Mar) unless your employer deducts it.' : ''}` : due < 0 ? `<b>About ${money(-due)} refund</b> when you file.` : '<b>All covered.</b>'}</div>
     ${rough ? `<p class="muted" style="margin:8px 0 0">Your salary credits are take-home (after TDS and PF), so this guess is low. Enter your <b>gross salary</b> from your payslip for a real estimate.</p>` : ''}
     <div class="label">How it's worked out (${best} regime)</div>
     ${row(`Salary ${gross ? '(gross, entered)' : `(take-home ${D.months ? `${money(D.salary)} in ${D.months} months → ${money(projTake)}/yr` : ''})`}`, money(d.gross))}
@@ -917,9 +959,11 @@ function renderTax() {
     ${row('Taxable income (slab)', money(B.normal))}${d.stcg ? row('Short-term gains (20%)', money(d.stcg)) : ''}${d.ltcg ? row('Long-term gains (12.5% above ₹1.25L)', money(d.ltcg)) : ''}
     ${row('Slab tax', money(B.slab))}${B.rebate ? row('− Rebate (87A)', money(B.rebate)) : ''}${B.cg ? row('+ Capital gains tax', money(B.cg)) : ''}${row('+ Cess 4%', money(B.cess))}
     ${row('Tax for the year', money(B.tax), 'tot')}
-    <button class="small" data-tax="edit" style="margin-top:10px">${rough ? 'Enter gross salary & TDS' : 'Edit details'}</button>
+    <div class="btns" style="margin:10px 0 0"><button class="small" data-tax="edit">${rough ? 'Enter gross salary & TDS' : 'Edit details'}</button><button class="small" data-taxref="1">⟳ Refresh tax rules</button></div>
+    <div class="muted" style="margin-top:6px">${RU.exact ? `Using ${fyLabel(fy)} rules` : `⚠ ${fyLabel(fy)} rules not published yet — using ${fyLabel(RU.year)} rules`} · updated ${dateY(TAXR.updated)}</div>
     <p class="muted" style="margin-bottom:0">An estimate, not tax advice — check with your Form 16 / a tax advisor before filing. Surcharge (income over ₹50L) isn't included.</p>`;
   box.dataset.fy = fy;
+  if (!taxFetched) fetchTaxRules(false);
 }
 function openTaxForm(fy) {
   const D = taxData(fy), I = taxInputs(fy), v = k => I[k] ?? '';
@@ -943,15 +987,15 @@ function openTaxForm(fy) {
     S.tax = { ...(S.tax || {}), [fy]: o }; saveMeta(); closeSheet(); toast('Tax details saved');
   });
 }
-document.addEventListener('click', ev => { const b = ev.target.closest('[data-tax]'); if (b) openTaxForm(+$('#taxBox').dataset.fy || fyOf(mk(today()))); });
+document.addEventListener('click', ev => { if (ev.target.closest('[data-taxref]')) { ev.target.closest('[data-taxref]').textContent = '⟳ Checking…'; return fetchTaxRules(true); } const b = ev.target.closest('[data-tax]'); if (b) openTaxForm(+$('#taxBox').dataset.fy || fyOf(mk(today()))); });
 let openFriend = null;
 function renderFriends() {
   const L = friendLedger(), fs = Object.values(L).filter(f => f.list.length);
   if (!fs.length) { $('#friendsBox').innerHTML = '<div class="muted">Paid for a friend (e.g. their train ticket) or lent money? In Expenses, select it and tap 🤝 Friend. It won\'t count as your spending, and when they pay you back, mark that credit the same way.</div>'; return; }
   fs.sort((a, b) => b.owed - a.owed || b.paid - a.paid);
-  const owed = r2(fs.reduce((t, f) => t + f.owed, 0)), shared = r2(fs.reduce((t, f) => t + f.shared, 0));
-  $('#friendsBox').innerHTML = `<div class="big" style="font-size:24px">${money(owed)}</div><div class="muted">${owed ? 'Friends still owe you' : 'All settled 🎉'} · not counted in your spending${shared ? ` · ${money(shared)} paid back for shared costs (reduces your spending)` : ''}</div>
-    ${fs.map(f => `<div class="settle frow" data-fr="${esc(f.name)}"><span>🤝 ${esc(f.name)}<span class="muted"> · ${f.paid ? 'paid ' + money(f.paid) : ''}${f.paid && f.back ? ', ' : ''}${f.back ? 'got back ' + money(f.back) : ''}${f.shared ? ` (${money(f.shared)} for shared costs)` : ''}</span></span><b class="${f.owed > 0 ? 'up' : 'down'}">${f.owed > 0 ? 'owes ' + money(f.owed) : 'settled ✓'}</b></div>${openFriend === f.name ? `<div>${f.list.sort((x, y) => y.date.localeCompare(x.date)).map(e => itemHTML(e, true)).join('')}</div>` : ''}`).join('')}`;
+  const owed = r2(fs.reduce((t, f) => t + Math.max(0, f.owed), 0)), iOwe = r2(fs.reduce((t, f) => t + Math.max(0, -f.owed), 0)), shared = r2(fs.reduce((t, f) => t + f.shared, 0));
+  $('#friendsBox').innerHTML = `<div class="big" style="font-size:24px">${money(owed)}</div><div class="muted">${owed ? 'Friends still owe you' : 'Nobody owes you 🎉'}${iOwe ? ` · <b class="up">you owe ${money(iOwe)}</b>` : ''} · not counted in your spending${shared ? ` · ${money(shared)} paid back for shared costs (reduces your spending)` : ''}</div>
+    ${fs.map(f => `<div class="settle frow" data-fr="${esc(f.name)}"><span>🤝 ${esc(f.name)}<span class="muted"> · ${[f.paid ? 'you paid ' + money(f.paid) : '', f.theyPaid ? 'they paid ' + money(f.theyPaid) + ' for you' : '', f.back ? 'got back ' + money(f.back) : ''].filter(Boolean).join(', ')}${f.shared ? ` (${money(f.shared)} for shared costs)` : ''}</span></span><b class="${f.owed > .5 ? 'up' : f.owed < -.5 ? 'warn' : 'down'}">${f.owed > .5 ? 'owes ' + money(f.owed) : f.owed < -.5 ? 'you owe ' + money(-f.owed) : 'settled ✓'}</b></div>${openFriend === f.name ? `<div>${f.list.sort((x, y) => y.date.localeCompare(x.date)).map(e => itemHTML(e, true)).join('')}</div>` : ''}`).join('')}`;
 }
 document.addEventListener('click', ev => { const r = ev.target.closest('[data-fr]'); if (r) { openFriend = openFriend === r.dataset.fr ? null : r.dataset.fr; renderFriends(); } });
 function renderInvest(k, inv, income) {
