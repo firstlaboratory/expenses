@@ -16,6 +16,19 @@ const INSTR_OTHER = { name: 'Other investments', icon: '📈', color: '#26a69a' 
 const instrOf = e => (INSTR.find(i => i.re.test(e.note) || i.re.test(e.cat)) || INSTR_OTHER).name;
 const OWE_OUT = 'Paid for friend', OWE_IN = 'Friend paid back';   // money fronted for friends: not my spend / income
 const isFriend = e => e.cat === OWE_OUT || e.cat === OWE_IN;
+// A split expense counts only my share as spending; each friend's share is treated as "paid for friend".
+const hasSplit = e => !isInc(e) && !e.trip && Array.isArray(e.split) && e.split.length > 0;
+const myShare = e => hasSplit(e) ? r2(e.amount - e.split.reduce((t, s) => t + s.amount, 0)) : e.amount;
+function expand(list) {
+  const out = [];
+  list.forEach(e => {
+    if (!hasSplit(e) || isFriend(e)) { out.push(e); return; }
+    const m = myShare(e); if (m > 0) out.push({ ...e, amount: m, _mine: true });
+    e.split.forEach(sp => out.push({ ...e, amount: sp.amount, cat: OWE_OUT, who: sp.who, _share: true }));
+  });
+  return out;
+}
+const own = () => expand(S.expenses);
 const TRANSFER_RE = /credit ?card|cc ?(bill|pay)|^cc\s|\bcc\b.*autopay|si-tad|cred club|\bcred\b|card ?payment|self transfer|own account/i;
 
 const $ = s => document.querySelector(s), $$ = s => [...document.querySelectorAll(s)];
@@ -62,7 +75,9 @@ function normalize(b) {
   if (!out.categories.some(c => c.name === OWE_OUT)) { const i = out.categories.findIndex(c => c.name === 'Other'); out.categories.splice(i < 0 ? out.categories.length : i, 0, { name: OWE_OUT, icon: '🤝', color: '#8d6e63', budget: 0 }); }
   if (!out.incCats.some(c => c.name === OWE_IN)) out.incCats.push({ name: OWE_IN, icon: '🔁', color: '#8d6e63' });
   out.rules = (Array.isArray(b.rules) ? b.rules : []).filter(r => r && r.k).map(r => ({ k: String(r.k), cat: cn(r.cat) }));
-  const fixE = e => ({ id: String(e.id || uid()), ts: +e.ts || Date.now(), date: String(e.date), amount: r2(+e.amount), cat: cn(e.cat), mode: MODES.includes(e.mode) ? e.mode : 'UPI', person: String(e.person || 'Me'), note: String(e.note || ''), ...(e.type === 'in' ? { type: 'in' } : {}), ...(e.who ? { who: String(e.who) } : {}) });
+  const splitOf_ = e => Array.isArray(e.split) && e.split.length ? { split: e.split.filter(x => x && x.who && +x.amount > 0).map(x => ({ who: String(x.who), amount: r2(+x.amount), ...(+x.shares ? { shares: +x.shares } : {}) })), splitBy: e.splitBy === 'amount' ? 'amount' : 'shares', meShares: +e.meShares >= 0 ? +e.meShares : 1 } : {};
+  const splitOf = splitOf_;
+  const fixE = e => ({ id: String(e.id || uid()), ts: +e.ts || Date.now(), date: String(e.date), amount: r2(+e.amount), cat: cn(e.cat), mode: MODES.includes(e.mode) ? e.mode : 'UPI', person: String(e.person || 'Me'), note: String(e.note || ''), ...(e.type === 'in' ? { type: 'in' } : {}), ...(e.who ? { who: String(e.who) } : {}), ...splitOf(e) });
   const ok = e => e && /^\d{4}-\d{2}-\d{2}$/.test(e.date) && +e.amount > 0;
   out.expenses = (b.expenses || []).filter(ok).map(fixE);
   (b.trips || []).forEach(t => {
@@ -85,8 +100,8 @@ const tripByName = n => S.trips.find(t => t.name.toLowerCase() === String(n).tri
 const tripExp = id => TE[id] || [];
 const allExp = () => S.expenses.concat(...Object.values(TE));
 const isInc = e => e.type === 'in';
-const inMonth = m => S.expenses.filter(e => mk(e.date) === m && !isInc(e) && !isFriend(e));          // spending only
-const incMonth = m => S.expenses.filter(e => mk(e.date) === m && isInc(e) && !isFriend(e));          // income only
+const inMonth = m => own().filter(e => mk(e.date) === m && !isInc(e) && !isFriend(e));          // spending only
+const incMonth = m => own().filter(e => mk(e.date) === m && isInc(e) && !isFriend(e));          // income only
 const isRefund = e => isInc(e) && /refund|cashback/i.test(e.cat);
 const findExp = (id, t) => (t ? tripExp(t) : S.expenses).find(e => e.id === id);
 const meIn = t => (t && t.names && user && t.names[user.uid]) || myName();
@@ -99,7 +114,7 @@ const catName = n => ([...S.categories, ...S.incCats].find(c => c.name.toLowerCa
 // ================= data writes (local or cloud) =================
 function track(p) { pending++; schedule(); return p.catch(fail).finally(() => { pending--; schedule(); }); }
 function fail(err) { console.error(err); const c = err && err.code || ''; toast(/permission/.test(c) ? 'Not allowed — check Firestore rules' : 'Sync error: ' + (c || err.message), 4500); }
-function strip(e) { const o = { date: e.date, amount: e.amount, cat: e.cat, mode: e.mode, person: e.person, note: e.note || '', ts: e.ts || Date.now() }; if (isInc(e)) o.type = 'in'; if (e.who) o.who = e.who; if (e.trip) o.trip = e.trip; if (cloud) o.by = user.uid; return o; }
+function strip(e) { const o = { date: e.date, amount: e.amount, cat: e.cat, mode: e.mode, person: e.person, note: e.note || '', ts: e.ts || Date.now() }; if (isInc(e)) o.type = 'in'; if (e.who) o.who = e.who; if (hasSplit(e)) { o.split = e.split; o.splitBy = e.splitBy || 'shares'; o.meShares = e.meShares ?? 1; } if (e.trip) o.trip = e.trip; if (cloud) o.by = user.uid; return o; }
 function eRef(e) { const F = fb.F; return e.trip ? F.doc(fb.db, 'trips', e.trip, 'expenses', e.id) : F.doc(fb.db, 'users', user.uid, 'expenses', e.id); }
 function collOf(e) { if (!e.trip) return S.expenses; return TE[e.trip] || (TE[e.trip] = []); }
 function localPut(e) { const c = collOf(e), i = c.findIndex(x => x.id === e.id); if (i >= 0) c[i] = e; else c.push(e); }
@@ -175,7 +190,7 @@ function startCloud() {
     schedule();
   }, fail));
 }
-function normalizeE(d) { const x = d.data(); return { id: d.id, ts: +x.ts || 0, date: x.date, amount: +x.amount, cat: x.cat || 'Other', mode: x.mode || 'UPI', person: x.person || '', note: x.note || '', by: x.by, ...(x.type === 'in' ? { type: 'in' } : {}), ...(x.who ? { who: x.who } : {}) }; }
+function normalizeE(d) { const x = d.data(); return { id: d.id, ts: +x.ts || 0, date: x.date, amount: +x.amount, cat: x.cat || 'Other', mode: x.mode || 'UPI', person: x.person || '', note: x.note || '', by: x.by, ...(x.type === 'in' ? { type: 'in' } : {}), ...(x.who ? { who: x.who } : {}), ...(Array.isArray(x.split) && x.split.length ? { split: x.split, splitBy: x.splitBy || 'shares', meShares: x.meShares ?? 1 } : {}) }; }
 function migrateLocal(fresh) {
   if (migrated) return; migrated = true;
   const L = loadLocal(); if (!L) return;
@@ -251,9 +266,9 @@ const peopleFor = t => t ? (trip(t) || {}).members || [myName()] : S.people;
 const opts = (list, sel) => list.map(p => `<option ${p === sel ? 'selected' : ''}>${esc(p)}</option>`).join('');
 
 function itemHTML(e, showDay) {
-  const c = cat(e.cat), t = e.trip && trip(e.trip);
+  const c = cat(e.cat), t = e.trip && trip(e.trip), spl = !e._mine && !e._share && hasSplit(e);
   const sm = multi && view === 'list', on = sm && picked.has(e.id);
-  return `<div class="item${on ? ' picked' : ''}" data-id="${esc(e.id)}" data-trip="${e.trip || ''}">${sm ? `<span class="tick">${on ? '✓' : ''}</span>` : ''}<div class="ic" ${sm ? '' : 'data-ic="1"'} style="background:${c.color}22">${c.icon}</div><div class="mid"><div class="t">${esc(e.note || c.name)}</div><div class="s">${esc(c.name)}${e.who ? (isInc(e) ? ' from ' : ' · ') + esc(e.who) : ''} · ${e.mode} · ${esc(e.person)}${t && view !== 'trips' ? ' · ✈ ' + esc(t.name) : ''}${showDay ? ' · ' + dayLabel(e.date) : ''}</div></div><div class="a${isInc(e) ? ' inc' : ''}">${isInc(e) ? '+' : ''}${money(e.amount)}</div></div>`;
+  return `<div class="item${on ? ' picked' : ''}" data-id="${esc(e.id)}" data-trip="${e.trip || ''}">${sm ? `<span class="tick">${on ? '✓' : ''}</span>` : ''}<div class="ic" ${sm ? '' : 'data-ic="1"'} style="background:${c.color}22">${c.icon}</div><div class="mid"><div class="t">${esc(e.note || c.name)}</div><div class="s">${esc(c.name)}${e.who ? (isInc(e) ? ' from ' : ' · ') + esc(e.who) : ''}${spl ? ` · <span class="splt">➗ you ${money(myShare(e))}</span>` : e._mine ? ' · your share' : e._share ? ' · split share' : ''} · ${e.mode} · ${esc(e.person)}${t && view !== 'trips' ? ' · ✈ ' + esc(t.name) : ''}${showDay ? ' · ' + dayLabel(e.date) : ''}</div></div><div class="a${isInc(e) ? ' inc' : ''}">${isInc(e) ? '+' : ''}${money(e.amount)}</div></div>`;
 }
 function groupedHTML(rows) {
   const g = {}; rows.forEach(e => (g[e.date] = g[e.date] || []).push(e));
@@ -267,6 +282,52 @@ document.addEventListener('click', ev => {
 });
 
 // ---------- Add ----------
+let SPL = { on: false, by: 'shares', me: 1, rows: [] };
+const splitAllowed = () => selType !== 'in' && !$('#fFor').value && selCat !== OWE_OUT;
+function splitCalc() {
+  const total = parseFloat($('#amt').value) || 0, rows = SPL.rows;
+  if (SPL.by === 'shares') { const n = SPL.me + rows.reduce((t, r) => t + (r.shares || 0), 0); const per = n ? total / n : 0; rows.forEach(r => r.amount = r2(per * (r.shares || 0))); }
+  const others = rows.reduce((t, r) => t + (r.amount || 0), 0);
+  return { total, others: r2(others), me: r2(total - others) };
+}
+function renderSplit(full) {
+  const ok = splitAllowed(); $('#splitWrap').classList.toggle('hidden', !ok); if (!ok) return;
+  $('#splitTgl').classList.toggle('on', SPL.on); $('#splitBody').classList.toggle('hidden', !SPL.on);
+  if (!SPL.on) return;
+  if (full) {
+    if (!SPL.rows.length) SPL.rows.push({ who: '', shares: 1, amount: 0 });
+    $$('#splitSeg button').forEach(b => b.classList.toggle('on', b.dataset.by === SPL.by));
+    $('#splitList').innerHTML = `<datalist id="splFr">${friends().map(f => `<option value="${esc(f)}">`).join('')}</datalist>
+      <div class="srow"><span class="sname">Me</span>${SPL.by === 'shares' ? stepper('me', SPL.me) : '<span class="muted sval" id="spMe"></span>'}<span class="samt" id="spMeAmt"></span><span class="sx"></span></div>
+      ${SPL.rows.map((r, i) => `<div class="srow"><input class="sname" data-si="${i}" data-sk="who" list="splFr" placeholder="Friend's name" value="${esc(r.who)}" maxlength="30">${SPL.by === 'shares' ? stepper(i, r.shares) : `<input class="sval" type="number" inputmode="decimal" min="0" step="0.01" data-si="${i}" data-sk="amount" value="${r.amount || ''}" placeholder="₹">`}<span class="samt" data-sa="${i}"></span><button type="button" class="sx" data-sdel="${i}" aria-label="Remove">✕</button></div>`).join('')}`;
+  }
+  const c = splitCalc();
+  if ($('#spMeAmt')) $('#spMeAmt').textContent = money(Math.max(0, c.me));
+  SPL.rows.forEach((r, i) => { const el = $(`[data-sa="${i}"]`); if (el) el.textContent = SPL.by === 'shares' ? money(r.amount) : ''; });
+  $('#splitSum').innerHTML = !c.total ? 'Enter the amount above' : c.me < 0 ? `<span class="up">Friends' shares are ${money(-c.me)} more than the total</span>` : `You pay <b>${money(c.me)}</b> · friends owe you <b>${money(c.others)}</b>`;
+}
+const stepper = (i, v) => `<span class="step"><button type="button" data-sstep="${i}" data-d="-1">−</button><b>${v}</b><button type="button" data-sstep="${i}" data-d="1">+</button></span>`;
+$('#splitTgl').onclick = () => { SPL.on = !SPL.on; renderSplit(true); };
+$('#splitSeg').onclick = e => { const b = e.target.closest('[data-by]'); if (!b) return; if (b.dataset.by === 'amount' && SPL.by === 'shares') splitCalc(); SPL.by = b.dataset.by; renderSplit(true); };
+$('#splitAdd').onclick = () => { SPL.rows.push({ who: '', shares: 1, amount: 0 }); renderSplit(true); const ins = $$('#splitList input.sname'); ins[ins.length - 1].focus(); };
+$('#splitList').addEventListener('click', e => {
+  const st = e.target.closest('[data-sstep]'), del = e.target.closest('[data-sdel]');
+  if (st) { const i = st.dataset.sstep, d = +st.dataset.d; if (i === 'me') SPL.me = Math.max(0, SPL.me + d); else SPL.rows[+i].shares = Math.max(1, (SPL.rows[+i].shares || 1) + d); renderSplit(true); }
+  if (del) { SPL.rows.splice(+del.dataset.sdel, 1); if (!SPL.rows.length) SPL.on = false; renderSplit(true); }
+});
+$('#splitList').addEventListener('input', e => { const i = e.target.dataset.si; if (i === undefined) return; const r = SPL.rows[+i]; if (e.target.dataset.sk === 'who') r.who = e.target.value; else r.amount = r2(parseFloat(e.target.value) || 0); renderSplit(false); });
+$('#amt').addEventListener('input', () => renderSplit(false));
+$('#fFor').addEventListener('change', () => renderSplit(true));
+function splitFromForm() {
+  if (!SPL.on || !splitAllowed()) return { ok: true, data: null };
+  const c = splitCalc(), rows = SPL.rows.map(r => ({ ...r, who: r.who.trim() })).filter(r => r.who || r.amount);
+  if (!rows.length) return { ok: true, data: null };
+  if (rows.some(r => !r.who)) return { ok: false, msg: "Enter each friend's name" };
+  if (new Set(rows.map(r => r.who.toLowerCase())).size < rows.length) return { ok: false, msg: 'Each friend only once' };
+  if (rows.some(r => !(r.amount > 0))) return { ok: false, msg: SPL.by === 'shares' ? 'Each friend needs at least 1 share' : 'Enter an amount for each friend' };
+  if (c.me < 0) return { ok: false, msg: "Friends' shares are more than the total" };
+  return { ok: true, data: { split: rows.map(r => ({ who: r.who, amount: r.amount, ...(SPL.by === 'shares' ? { shares: r.shares } : {}) })), splitBy: SPL.by, meShares: SPL.me } };
+}
 function renderAdd() {
   const tv = $('#impTarget').value; $('#impTarget').innerHTML = targetOptions(tv); if (tv && !trip(tv)) $('#impTarget').value = '';
   const fv = $('#fFor').value; $('#fFor').innerHTML = targetOptions(fv);
@@ -283,6 +344,7 @@ function renderAdd() {
   $('#catChips').innerHTML = (inc ? S.incCats : S.categories).map(c => `<button type="button" class="chip ${c.name === cur ? 'sel' : ''}" data-c="${esc(c.name)}">${c.icon} ${esc(c.name)}</button>`).join('');
   $('#modeChips').innerHTML = MODES.map(m => `<button type="button" class="chip ${m === selMode ? 'sel' : ''}" data-mode="${m}">${m}</button>`).join('');
   fillPerson();
+  renderSplit(true);
   if (!$('#date').value) $('#date').value = today();
   renderFact($('#factAdd'), factMonth());
   const r = allExp().sort((a, b) => b.ts - a.ts).slice(0, 6);
@@ -303,10 +365,11 @@ function startEdit(id, t) {
   const e = findExp(id, t); if (!e) return;
   edit = { id, trip: t || '' }; go('add');
   $('#fFor').value = t || ''; $('#amt').value = e.amount; selType = isInc(e) ? 'in' : 'out'; if (isInc(e)) selInc = e.cat; else selCat = e.cat; selMode = e.mode; $('#date').value = e.date; $('#note').value = e.note || ''; $('#who').value = e.who || '';
+  SPL = hasSplit(e) ? { on: true, by: e.splitBy || 'shares', me: e.meShares ?? 1, rows: e.split.map(x => ({ who: x.who, amount: x.amount, shares: x.shares || 1 })) } : { on: false, by: 'shares', me: 1, rows: [] };
   renderAdd(); fillPerson(e.person);
   $('#saveBtn').textContent = 'Update expense'; $('#editBtns').classList.remove('hidden'); openForm(true);
 }
-function resetForm() { edit = null; selType = 'out'; const f = $('#fFor').value; $('#f').reset(); $('#fFor').value = f; $('#date').value = today(); $('#saveBtn').textContent = 'Save expense'; $('#editBtns').classList.add('hidden'); }
+function resetForm() { edit = null; selType = 'out'; SPL = { on: false, by: 'shares', me: 1, rows: [] }; const f = $('#fFor').value; $('#f').reset(); $('#fFor').value = f; $('#date').value = today(); $('#saveBtn').textContent = 'Save expense'; $('#editBtns').classList.add('hidden'); }
 $('#cancelEdit').onclick = () => { resetForm(); openForm(false); renderAdd(); };
 $('#delBtn').onclick = () => { const e = edit && findExp(edit.id, edit.trip); if (!e || !confirm('Delete this expense?')) return; delExp(e); resetForm(); openForm(false); toast('Deleted'); };
 $('#note').addEventListener('change', () => { if (edit) return; const r = ruleFor($('#note').value, selType); if (r) { if (selType === 'in') selInc = r; else selCat = r; renderAdd(); } });
@@ -317,16 +380,17 @@ $('#f').onsubmit = ev => {
   const data = { amount: r2(amount), cat: inc ? selInc : selCat, mode: selMode, date: $('#date').value || today(), person: $('#person').value, note: $('#note').value.trim() };
   const who = $('#who').value.trim();
   if (data.cat === OWE_OUT || data.cat === OWE_IN) { if (!who) { $('#who').focus(); return toast("Enter your friend's name"); } data.who = who; }
+  const sp = splitFromForm(); if (!sp.ok) return toast(sp.msg, 3500); if (sp.data) Object.assign(data, sp.data);
   let changed = null, e;
   if (edit) {
     const old = findExp(edit.id, edit.trip); if (!old) { resetForm(); return; }
-    e = { ...old, ...data }; delete e.trip; delete e.type; if (!data.who) delete e.who; if (inc) e.type = 'in'; if (forT) e.trip = forT;
+    e = { ...old, ...data }; delete e.trip; delete e.type; if (!data.who) delete e.who; if (!data.split) { delete e.split; delete e.splitBy; delete e.meShares; } if (inc) e.type = 'in'; if (forT) e.trip = forT;
     if ((old.trip || '') !== forT) delExp(old);
     if (old.cat !== data.cat && !isFriend(e)) changed = e;
-    putExp(e); toast('Updated');
+    putExp(e); toast(data.split ? `Updated · your share ${money(myShare(e))}` : 'Updated');
   } else {
     e = { id: uid(), ts: Date.now(), ...data }; if (inc) e.type = 'in'; if (forT) e.trip = forT;
-    putExp(e); toast((inc ? 'Income saved +' : 'Saved ') + money(e.amount));
+    putExp(e); toast(data.split ? `Saved · your share ${money(myShare(e))}` : (inc ? 'Income saved +' : 'Saved ') + money(e.amount));
   }
   if (!forT && S.lastPerson !== data.person) { S.lastPerson = data.person; saveMeta(); }
   if (!forT && !inc) budgetCheck(data.cat, mk(data.date));
@@ -344,8 +408,9 @@ function renderList() {
   const q = $('#fSearch').value.trim().toLowerCase();
   const rows = S.expenses.filter(e => e.date.startsWith(pKey()) && (!ft || (ft === 'in') === isInc(e))).filter(e => (!fp || e.person === fp) && (!fc || e.cat === fc) && (!q || (e.note || '').toLowerCase().includes(q) || e.cat.toLowerCase().includes(q)));
   listRows = rows; picked.forEach(id => { if (!rows.some(e => e.id === id)) picked.delete(id); }); renderSelBar();
-  const o = sum(rows.filter(e => !isInc(e) && !isInvest(e) && !isFriend(e))), iv = sum(rows.filter(e => !isInc(e) && isInvest(e) && !isFriend(e))), i = sum(rows.filter(e => isInc(e) && !isFriend(e))), fr = sum(rows.filter(e => e.cat === OWE_OUT)) - sum(rows.filter(e => e.cat === OWE_IN));
-  $('#listSum').innerHTML = rows.length ? `${rows.length} entr${rows.length > 1 ? 'ies' : 'y'}${o ? ' · spent ' + money(o) : ''}${iv ? ' · invested ' + money(iv) : ''}${rows.some(isFriend) ? ' · friends ' + (fr >= 0 ? '' : '−') + money(Math.abs(fr)) : ''}${i ? ` · <span class="inc">received +${money(i)}</span>` : ''}` : '';
+  const xr = expand(rows);
+  const o = sum(xr.filter(e => !isInc(e) && !isInvest(e) && !isFriend(e))), iv = sum(xr.filter(e => !isInc(e) && isInvest(e) && !isFriend(e))), i = sum(xr.filter(e => isInc(e) && !isFriend(e))), fr = sum(xr.filter(e => e.cat === OWE_OUT)) - sum(xr.filter(e => e.cat === OWE_IN));
+  $('#listSum').innerHTML = rows.length ? `${rows.length} entr${rows.length > 1 ? 'ies' : 'y'}${o ? ' · spent ' + money(o) : ''}${iv ? ' · invested ' + money(iv) : ''}${xr.some(isFriend) ? ' · friends ' + (fr >= 0 ? '' : '−') + money(Math.abs(fr)) : ''}${i ? ` · <span class="inc">received +${money(i)}</span>` : ''}` : '';
   $('#list').innerHTML = rows.length ? groupedHTML(rows) : `<div class="empty">Nothing here for this ${perWord(pKey())}.</div>`;
 }
 ['#fPerson', '#fCat', '#fType'].forEach(s => $(s).onchange = renderList); $('#fSearch').oninput = renderList;
@@ -415,7 +480,7 @@ function askFriend(title, sub, done) {
   setTimeout(() => $('#fName').focus(), 60);
 }
 function markFriend(list, n) {
-  putMany(list.map(e => ({ ...e, cat: isInc(e) ? OWE_IN : OWE_OUT, who: n })));
+  putMany(list.map(e => { const x = { ...e, cat: isInc(e) ? OWE_IN : OWE_OUT, who: n }; delete x.split; delete x.splitBy; delete x.meShares; return x; }));
   const out = list.filter(e => !isInc(e)).length, back = list.length - out;
   toast(`${out ? `${out} marked as paid for ${n}` : ''}${out && back ? ' · ' : ''}${back ? `${back} as paid back by ${n}` : ''}`, 3500);
 }
@@ -527,9 +592,9 @@ const dSel = { out: null, in: null, inv: null };               // category picke
 const pKey = () => pmode === 'year' ? month.slice(0, 4) : month;
 const isYearKey = k => k.length === 4;
 const prevKey = k => isYearKey(k) ? String(+k - 1) : shiftMonth(k, -1);
-const spendIn = k => S.expenses.filter(e => e.date.startsWith(k) && !isInc(e) && !isFriend(e));
+const spendIn = k => own().filter(e => e.date.startsWith(k) && !isInc(e) && !isFriend(e));
 const spendNI = k => spendIn(k).filter(e => !isInvest(e));        // spending without investments
-const incomeIn = k => S.expenses.filter(e => e.date.startsWith(k) && isInc(e) && !isFriend(e));
+const incomeIn = k => own().filter(e => e.date.startsWith(k) && isInc(e) && !isFriend(e));
 function daysIn(k) {
   const t = today();
   if (isYearKey(k)) { if (k === t.slice(0, 4)) return Math.max(1, Math.round((new Date(t + 'T00:00') - new Date(k + '-01-01T00:00')) / 864e5) + 1); return (+k % 4 === 0 && (+k % 100 !== 0 || +k % 400 === 0)) ? 366 : 365; }
@@ -621,7 +686,7 @@ function donut(cv, legend, detail, ex, list, key) {
 }
 let openFriend = null;
 function renderFriends() {
-  const fe = S.expenses.filter(e => isFriend(e) && e.who);
+  const fe = own().filter(e => isFriend(e) && e.who);
   if (!fe.length) { $('#friendsBox').innerHTML = '<div class="muted">Paid for a friend (e.g. their train ticket)? In Expenses, select it and tap 🤝 Friend. It won\'t count as your spending, and when they pay you back, mark that credit the same way.</div>'; return; }
   const by = {}; fe.forEach(e => { const b = by[e.who] || (by[e.who] = { paid: 0, back: 0, list: [] }); if (e.cat === OWE_OUT) b.paid += e.amount; else b.back += e.amount; b.list.push(e); });
   const names = Object.keys(by).sort((a, b) => (by[b].paid - by[b].back) - (by[a].paid - by[a].back));
@@ -836,7 +901,7 @@ async function deliver(name, text, type) {
 const csvCell = v => { v = String(v ?? ''); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
 function exportCSV(list, base) {
   if (!list.length) return toast('Nothing to download yet');
-  const rows = [['Date', 'Type', 'Amount', 'Category', 'Mode', 'PaidBy', 'Note', 'Friend', 'Trip', 'Id'], ...[...list].sort((a, b) => a.date.localeCompare(b.date)).map(e => [e.date, isInc(e) ? 'Income' : 'Expense', e.amount, e.cat, e.mode, e.person, e.note, e.who || '', e.trip ? (trip(e.trip) || {}).name || '' : '', e.id])];
+  const rows = [['Date', 'Type', 'Amount', 'Category', 'Mode', 'PaidBy', 'Note', 'Friend', 'Split', 'Trip', 'Id'], ...[...list].sort((a, b) => a.date.localeCompare(b.date)).map(e => [e.date, isInc(e) ? 'Income' : 'Expense', e.amount, e.cat, e.mode, e.person, e.note, e.who || '', hasSplit(e) ? e.split.map(x => x.who + '=' + x.amount).join('; ') : '', e.trip ? (trip(e.trip) || {}).name || '' : '', e.id])];
   deliver(`${base}-${today()}.csv`, '﻿' + rows.map(r => r.map(csvCell).join(',')).join('\r\n'), 'text/csv');
 }
 $('#dlCsv').onclick = () => exportCSV(S.expenses.concat(...Object.entries(TE).map(([id, l]) => l.map(e => ({ ...e, trip: id })))), 'trickle');
@@ -894,11 +959,11 @@ function rowsToExpenses(rows) {
     });
     return { kind: 'bank', list };
   }
-  const cty = col(/^type$/), cd = col(/^date$/), ca = col(/^amount/), cc = col(/categ/), cm = col(/mode/), cp = col(/paid ?by|person/), cn = col(/note|desc/), ct = col(/^trip$/), ci = col(/^id$/), cw = col(/^friend$/);
+  const cty = col(/^type$/), cd = col(/^date$/), ca = col(/^amount/), cc = col(/categ/), cm = col(/mode/), cp = col(/paid ?by|person/), cn = col(/note|desc/), ct = col(/^trip$/), ci = col(/^id$/), cw = col(/^friend$/), cs = col(/^split$/);
   rows.slice(hi + 1).forEach((r, i) => {
     const d = parseDate(r[cd]), amt = num(r[ca]); if (!d || !(amt > 0)) return;
     const note = cn >= 0 ? String(r[cn] || '') : '', inc = cty >= 0 && /^in/i.test(r[cty] || '');
-    list.push({ id: (ci >= 0 && r[ci]) || 'c' + hash(d + '|' + amt + '|' + note), ts: now - i, ...(inc ? { type: 'in' } : {}), date: d, amount: r2(amt), cat: cc >= 0 && r[cc] ? catName(r[cc]) : inc ? guessInc(note) : guessCat(note), mode: MODES.includes(r[cm]) ? r[cm] : 'UPI', person: cp >= 0 ? String(r[cp] || '') : '', note, ...(cw >= 0 && r[cw] ? { who: String(r[cw]).trim() } : {}), tripName: ct >= 0 ? String(r[ct] || '').trim() : '' });
+    list.push({ id: (ci >= 0 && r[ci]) || 'c' + hash(d + '|' + amt + '|' + note), ts: now - i, ...(inc ? { type: 'in' } : {}), date: d, amount: r2(amt), cat: cc >= 0 && r[cc] ? catName(r[cc]) : inc ? guessInc(note) : guessCat(note), mode: MODES.includes(r[cm]) ? r[cm] : 'UPI', person: cp >= 0 ? String(r[cp] || '') : '', note, ...(cw >= 0 && r[cw] ? { who: String(r[cw]).trim() } : {}), ...(cs >= 0 && r[cs] ? { split: String(r[cs]).split(';').map(x => x.split('=')).filter(x => x.length === 2 && x[0].trim() && +x[1] > 0).map(([w, a]) => ({ who: w.trim(), amount: r2(+a) })), splitBy: 'amount', meShares: 1 } : {}), tripName: ct >= 0 ? String(r[ct] || '').trim() : '' });
   });
   return { kind: 'csv', list };
 }

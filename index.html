@@ -119,6 +119,15 @@ canvas{width:100%;display:block}
 .selbar{position:fixed;left:0;right:0;bottom:calc(56px + env(safe-area-inset-bottom));z-index:12;background:var(--card);border-top:1px solid var(--line);box-shadow:0 -4px 14px #0002;padding:10px 16px}
 .selbtns{display:flex;gap:5px;margin-top:8px}.selbtns button{flex:1 1 auto;padding:9px 4px;font-size:13px;white-space:nowrap}.selbtns [data-bulk=all],.selbtns [data-bulk=del]{flex:0 0 auto;padding:9px 10px}
 .frow{cursor:pointer}
+.tgl{display:flex;justify-content:space-between;align-items:center;width:100%;margin-top:14px;background:var(--bg)}
+.tgl i{width:38px;height:22px;border-radius:11px;background:var(--line);position:relative;transition:.2s}.tgl i::after{content:'';position:absolute;left:3px;top:3px;width:16px;height:16px;border-radius:50%;background:#fff;transition:.2s}
+.tgl.on i{background:var(--accent)}.tgl.on i::after{left:19px}
+.srow{display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--line)}
+.srow .sname{flex:1;min-width:0;margin:0}.srow span.sname{font-weight:600;padding-left:4px}
+.srow .sval{width:84px;flex:none;margin:0}.srow .samt{width:72px;text-align:right;font-weight:600;flex:none;font-size:14px}
+.srow .sx{width:30px;flex:none;padding:6px 0;border:0;background:none;color:var(--muted)}
+.step{display:inline-flex;align-items:center;border:1px solid var(--line);border-radius:10px;flex:none}.step button{border:0;background:none;padding:6px 11px;font-size:16px}.step b{min-width:16px;text-align:center}
+.splt{color:var(--accent)}
 body.selecting main{padding-bottom:180px}
 .banner{background:var(--accent-soft);color:var(--text);border-radius:12px;padding:12px 14px;margin-bottom:12px;font-size:14px}
 .gbtn{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;margin-top:10px;font-weight:600}
@@ -147,6 +156,9 @@ body.selecting main{padding-bottom:180px}
     </div>
     <label id="whoWrap" class="hidden"><span id="whoLbl">Which friend is this for?</span><input id="who" list="whoList" placeholder="Friend's name" maxlength="30"></label><datalist id="whoList"></datalist>
     <label>Note<input id="note" placeholder="What was it for?" maxlength="120"></label>
+    <div id="splitWrap" class="hidden"><button type="button" class="tgl" id="splitTgl"><span>➗ Split with friends</span><i></i></button>
+      <div id="splitBody" class="hidden"><div class="seg" id="splitSeg" style="margin:10px 0 6px"><button type="button" data-by="shares" class="on">By shares</button><button type="button" data-by="amount">Exact amounts</button></div>
+        <div id="splitList"></div><button type="button" class="link" id="splitAdd">+ Add friend</button><div class="muted" id="splitSum" style="margin-top:4px"></div></div></div>
     <button class="primary" id="saveBtn">Save expense</button>
     <div class="btns hidden" id="editBtns" style="margin-top:8px"><button type="button" id="cancelEdit">Cancel</button><button type="button" class="danger" id="delBtn">Delete</button></div>
   </form>
@@ -231,6 +243,6 @@ body.selecting main{padding-bottom:180px}
 <input type="file" id="impFile" hidden accept=".csv,.txt,.xls,.xlsx,.json,text/csv,text/plain,application/json,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet">
 <div class="sheet-bg" id="sheetBg"><div class="sheet" id="sheet"></div></div>
 <div class="toast" id="toast"></div>
-<script type="module" src="app.js?v=16"></script>
+<script type="module" src="app.js?v=17"></script>
 </body>
 </html>
