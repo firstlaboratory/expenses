@@ -72,6 +72,8 @@ canvas{width:100%;display:block}
 .empty{text-align:center;color:var(--muted);padding:24px 8px}
 .toast{position:fixed;left:50%;bottom:84px;transform:translateX(-50%) translateY(20px);background:var(--text);color:var(--bg);padding:10px 16px;border-radius:10px;font-size:14px;opacity:0;transition:.25s;pointer-events:none;z-index:40;max-width:90vw;text-align:center}
 .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+.catwrap{border-bottom:1px solid var(--line);padding:8px 0}.catwrap .catrow{margin-bottom:6px}
+.catopt{display:flex;gap:6px}.catopt select{margin:0;padding:7px;font-size:13px;flex:1;min-width:0}.catopt.muted{font-size:12px;padding-left:4px}
 .catrow{display:flex;gap:6px;align-items:center;margin-bottom:8px}
 .catrow input{margin:0}
 .catrow .e{width:52px;text-align:center;flex:none}
@@ -250,6 +252,6 @@ body.selecting main{padding-bottom:180px}
 <input type="file" id="impFile" hidden accept=".csv,.txt,.xls,.xlsx,.json,text/csv,text/plain,application/json,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet">
 <div class="sheet-bg" id="sheetBg"><div class="sheet" id="sheet"></div></div>
 <div class="toast" id="toast"></div>
-<script type="module" src="app.js?v=18"></script>
+<script type="module" src="app.js?v=19"></script>
 </body>
 </html>
