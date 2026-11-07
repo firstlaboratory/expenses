@@ -250,19 +250,23 @@ function onUser(u) {
 }
 function startCloud() {
   const F = fb.F, db = fb.db, me = user.uid, metaRef = F.doc(db, 'users', me);
+  const denied = err => {   // cloud is private to its owner: fall back to this phone instead of an empty app
+    if (err && /permission/.test(err.code || '')) { toast('Cloud sync is private to this app\'s owner — using this phone only. Back up with Settings → Save backup file.', 6000); fb.A.signOut(fb.auth).catch(() => {}); return true; }
+    return false;
+  };
   unsubs.push(F.onSnapshot(metaRef, s => {
     if (s.exists()) { const m = normalize(s.data()); Object.assign(S, metaOf(m)); migrateLocal(false); }
     else if (!s.metadata.fromCache) { const L = loadLocal(); const m = L ? metaOf(L) : { ...blankMeta(), people: [myName()], lastPerson: myName() }; m.name = myName(); Object.assign(S, m); track(F.setDoc(metaRef, m)); migrateLocal(true); }
     schedule();
-  }, fail));
-  unsubs.push(F.onSnapshot(F.collection(db, 'users', me, 'expenses'), qs => { S.expenses = qs.docs.map(d => normalizeE(d)); schedule(); }, fail));
+  }, e => { if (!denied(e)) fail(e); }));
+  unsubs.push(F.onSnapshot(F.collection(db, 'users', me, 'expenses'), qs => { S.expenses = qs.docs.map(d => normalizeE(d)); schedule(); }, e => { if (!/permission/.test(e.code || '')) fail(e); }));
   unsubs.push(F.onSnapshot(F.query(F.collection(db, 'trips'), F.where('memberUids', 'array-contains', me)), qs => {
     S.trips = qs.docs.map(d => ({ ...d.data(), id: d.id, members: d.data().members || [] }));
     const ids = new Set(S.trips.map(t => t.id));
     for (const id in tripUnsubs) if (!ids.has(id)) { tripUnsubs[id](); delete tripUnsubs[id]; delete TE[id]; }
     ids.forEach(id => { if (!tripUnsubs[id]) tripUnsubs[id] = F.onSnapshot(F.collection(db, 'trips', id, 'expenses'), q2 => { TE[id] = q2.docs.map(d => ({ ...normalizeE(d), trip: id })); schedule(); }, () => {}); });
     schedule();
-  }, fail));
+  }, e => { if (!/permission/.test(e.code || '')) fail(e); }));
 }
 function normalizeE(d) { const x = d.data(); return { id: d.id, ts: +x.ts || 0, date: x.date, amount: +x.amount, cat: x.cat || 'Other', mode: x.mode || 'UPI', person: x.person || '', note: x.note || '', by: x.by, ...(x.type === 'in' ? { type: 'in' } : {}), ...(x.who ? { who: x.who } : {}), ...(x.reviewed ? { reviewed: true } : {}), ...(x.forShared ? { forShared: true } : {}), ...(x.tripLink ? { tripLink: x.tripLink } : {}), ...(x.tripSolo ? { tripSolo: true } : {}), ...(x.link ? { link: x.link } : {}), ...(x.solo ? { solo: true } : {}), ...(x.settle ? { settle: true, from: x.from || '', to: x.to || '' } : {}), ...(Array.isArray(x.split) && x.split.length ? { split: x.split, splitBy: x.splitBy || 'shares', meShares: x.meShares ?? 1 } : {}) }; }
 function migrateLocal(fresh) {
@@ -1119,7 +1123,7 @@ function renderAccount() {
       <button id="signOut" style="width:100%;margin-top:12px">Sign out</button>`;
     return;
   }
-  el.innerHTML = `<div class="label" style="margin-top:0">Account</div><div class="muted">Sign in to back up automatically, use Trickle on any phone, and share trips live.</div>
+  el.innerHTML = `<div class="label" style="margin-top:0">Account</div><div class="muted">Cloud sync is private to this app's owner. Everyone else: Trickle works fully on this phone — save a backup file now and then (below) to move to a new phone.</div>
     <button class="gbtn" id="gSign"><svg width="18" height="18" viewBox="0 0 48 48"><path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3C33.7 32.7 29.2 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.2 7.9 3l5.7-5.7C34 6.1 29.3 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.3-.1-2.4-.4-3.5z"/><path fill="#FF3D00" d="m6.3 14.7 6.6 4.8C14.7 15.1 19 12 24 12c3.1 0 5.8 1.2 7.9 3l5.7-5.7C34 6.1 29.3 4 24 4 16.3 4 9.7 8.3 6.3 14.7z"/><path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2C29.2 35.1 26.7 36 24 36c-5.2 0-9.6-3.3-11.3-8l-6.5 5C9.5 39.6 16.2 44 24 44z"/><path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.2-2.2 4.2-4.1 5.6l6.2 5.2C37 39.2 44 34 44 24c0-1.3-.1-2.4-.4-3.5z"/></svg>Continue with Google</button>
     <div class="label" style="text-align:center">or with email</div>
     <input id="aEmail" type="email" placeholder="Email" autocomplete="email"><input id="aPass" type="password" placeholder="Password (6+ characters)" autocomplete="current-password">
