@@ -119,8 +119,9 @@ canvas{width:100%;display:block}
 .tick+.ic::after{display:none}
 .item{user-select:none;-webkit-user-select:none}
 .selbar{position:fixed;left:0;right:0;bottom:calc(56px + env(safe-area-inset-bottom));z-index:12;background:var(--card);border-top:1px solid var(--line);box-shadow:0 -4px 14px #0002;padding:10px 16px}
-.selbtns{display:flex;gap:5px;margin-top:8px}.selbtns button{flex:1 1 auto;padding:9px 4px;font-size:13px;white-space:nowrap}.selbtns [data-bulk=all],.selbtns [data-bulk=del]{flex:0 0 auto;padding:9px 10px}
+.selbtns{display:flex;gap:4px;margin-top:8px}.selbtns button{flex:1 1 0;min-width:0;overflow:hidden;padding:9px 2px;font-size:13px;white-space:nowrap}.selbtns [data-bulk=all],.selbtns [data-bulk=del]{flex:0 0 auto;padding:9px 10px}
 .frow{cursor:pointer}
+.settle.tot{border-top:2px solid var(--text);font-weight:700}
 .nudge{display:flex;gap:10px;align-items:center;justify-content:space-between;background:var(--card);border:1px solid var(--line);border-left:4px solid var(--warn);border-radius:12px;padding:12px 14px;margin-bottom:10px;width:100%;text-align:left;font:inherit;color:var(--text)}
 .nudge-btn{border-left-color:var(--accent);cursor:pointer}.nudge .link{white-space:nowrap;flex:none}.nudge .go{color:var(--accent);font-weight:700;white-space:nowrap}
 .chk{border-radius:10px;padding:10px 12px;margin:10px 0 0;font-size:14px;background:var(--bg);border:1px solid var(--line)}
@@ -156,6 +157,8 @@ body.selecting main{padding-bottom:180px}
     <div class="seg" id="typeSeg"><button type="button" data-t="out" class="on">Expense</button><button type="button" data-t="in">Income</button></div>
     <div class="amt"><span id="amtSign">₹</span><input id="amt" type="number" inputmode="decimal" step="0.01" min="0.01" placeholder="0" required></div>
     <label id="forWrap">For<select id="fFor"></select></label>
+    <label id="linkWrap" class="hidden">Also show in a trip<select id="fLink"></select></label>
+    <label id="soloWrap" class="pvrow hidden" style="border:0;padding:8px 0 0"><input type="checkbox" id="fSolo"><span class="muted">Just my cost — don't split it in the trip</span></label>
     <div class="label">Category</div><div id="catChips" class="chips"></div>
     <div class="label">Paid via</div><div id="modeChips" class="chips"></div>
     <div class="row">
@@ -182,7 +185,7 @@ body.selecting main{padding-bottom:180px}
   <input id="fSearch" placeholder="Search notes…" style="margin:0 0 6px">
   <div class="row" style="align-items:center"><div id="listSum" class="muted"></div><button class="link" id="selBtn" style="flex:0 0 auto">Select</button></div>
   <div id="list"></div>
-  <p class="muted" style="text-align:center">Your personal spending and income. Trip expenses live in Trips.</p>
+  <p class="muted" style="text-align:center">Your personal spending and income. Expenses friends paid on a trip live in Trips.</p>
 </section>
 
 <section id="v-trips"><div id="tripsBox"></div></section>
@@ -194,6 +197,7 @@ body.selecting main{padding-bottom:180px}
   <div class="card fact-card" id="factStats"></div>
   <div class="card"><div class="label" style="margin-top:0">Spending by category</div><canvas id="donut" style="height:210px;cursor:pointer"></canvas><div class="legend" id="legend"></div><div id="outDetail"></div></div>
   <div class="card"><div class="label" style="margin-top:0">Income by source</div><canvas id="incDonut" style="height:210px;cursor:pointer"></canvas><div class="legend" id="incLegend"></div><div id="inDetail"></div></div>
+  <div class="card"><div class="label" style="margin-top:0">🧾 Income tax</div><div id="taxBox"></div></div>
   <div class="card"><div class="label" style="margin-top:0">🔁 Regular payments</div><div id="recurBox"></div></div>
   <div class="card"><div class="label" style="margin-top:0">🤝 Paid for friends</div><div id="friendsBox"></div></div>
   <div class="card"><div class="label" style="margin-top:0">📈 Investments</div><div id="invSummary"></div>
@@ -248,10 +252,10 @@ body.selecting main{padding-bottom:180px}
   <button data-v="stats"><b>▥</b>Stats</button>
   <button data-v="settings"><b>⚙</b>Settings</button>
 </nav>
-<div id="selBar" class="selbar hidden"><div id="selCount"></div><div class="selbtns"><button data-bulk="all">All</button><button data-bulk="note">✎ Note</button><button data-bulk="cat">🏷 Category</button><button data-bulk="friend">🤝 Friend</button><button data-bulk="del" class="danger">🗑</button></div></div>
+<div id="selBar" class="selbar hidden"><div id="selCount"></div><div class="selbtns"><button data-bulk="all">All</button><button data-bulk="note">✎ Note</button><button data-bulk="cat">🏷 Cat</button><button data-bulk="friend">🤝 Friend</button><button data-bulk="trip">✈ Trip</button><button data-bulk="del" class="danger">🗑</button></div></div>
 <input type="file" id="impFile" hidden accept=".csv,.txt,.xls,.xlsx,.json,text/csv,text/plain,application/json,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet">
 <div class="sheet-bg" id="sheetBg"><div class="sheet" id="sheet"></div></div>
 <div class="toast" id="toast"></div>
-<script type="module" src="app.js?v=19"></script>
+<script type="module" src="app.js?v=21"></script>
 </body>
 </html>
