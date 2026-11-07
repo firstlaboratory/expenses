@@ -80,7 +80,7 @@ function css(v) { return getComputedStyle(document.documentElement).getPropertyV
 let tt; function toast(m, ms = 2600) { const t = $('#toast'); t.textContent = m; t.classList.add('show'); clearTimeout(tt); tt = setTimeout(() => t.classList.remove('show'), ms); }
 
 // ================= state =================
-const blankMeta = () => ({ stmts: [], dismissed: [], houseAdded: true, categories: DEFAULT_CATS.map(([name, icon, color]) => ({ name, icon, color, budget: 0 })), incCats: DEFAULT_INC.map(([name, icon, color, counts]) => ({ name, icon, color, ...(counts ? { counts } : {}) })), people: ['Me'], rules: [], lastPerson: 'Me', name: '' });
+const blankMeta = () => ({ stmts: [], dismissed: [], tax: {}, houseAdded: true, categories: DEFAULT_CATS.map(([name, icon, color]) => ({ name, icon, color, budget: 0 })), incCats: DEFAULT_INC.map(([name, icon, color, counts]) => ({ name, icon, color, ...(counts ? { counts } : {}) })), people: ['Me'], rules: [], lastPerson: 'Me', name: '' });
 let S = { ...blankMeta(), expenses: [], trips: [] };
 let TE = {};                       // tripId -> [expenses]
 let user = null, fb = null, cloud = false, authKnown = false, pending = 0;
@@ -106,10 +106,11 @@ function normalize(b) {
   out.houseAdded = true;
   out.stmts = (Array.isArray(b.stmts) ? b.stmts : []).filter(x => x && /^\d{4}-\d{2}-\d{2}$/.test(x.from) && /^\d{4}-\d{2}-\d{2}$/.test(x.to)).map(x => ({ from: x.from, to: x.to, ...(isFinite(+x.opening) && x.opening !== null && x.opening !== '' ? { opening: +x.opening, closing: +x.closing } : {}), n: +x.n || 0 }));
   out.dismissed = (Array.isArray(b.dismissed) ? b.dismissed : []).map(String);
+  out.tax = b.tax && typeof b.tax === 'object' ? b.tax : {};
   out.rules = (Array.isArray(b.rules) ? b.rules : []).filter(r => r && r.k).map(r => ({ k: String(r.k), cat: cn(r.cat), ...(r.who ? { who: String(r.who) } : {}) }));
   const splitOf_ = e => Array.isArray(e.split) && e.split.length ? { split: e.split.filter(x => x && x.who && +x.amount > 0).map(x => ({ who: String(x.who), amount: r2(+x.amount), ...(+x.shares ? { shares: +x.shares } : {}) })), splitBy: e.splitBy === 'amount' ? 'amount' : 'shares', meShares: +e.meShares >= 0 ? +e.meShares : 1 } : {};
   const splitOf = splitOf_;
-  const fixE = e => ({ id: String(e.id || uid()), ts: +e.ts || Date.now(), date: String(e.date), amount: r2(+e.amount), cat: cn(e.cat), mode: MODES.includes(e.mode) ? e.mode : 'UPI', person: String(e.person || 'Me'), note: String(e.note || ''), ...(e.type === 'in' ? { type: 'in' } : {}), ...(e.who ? { who: String(e.who) } : {}), ...(e.reviewed ? { reviewed: true } : {}), ...(e.forShared ? { forShared: true } : {}), ...splitOf(e) });
+  const fixE = e => ({ id: String(e.id || uid()), ts: +e.ts || Date.now(), date: String(e.date), amount: r2(+e.amount), cat: cn(e.cat), mode: MODES.includes(e.mode) ? e.mode : 'UPI', person: String(e.person || 'Me'), note: String(e.note || ''), ...(e.type === 'in' ? { type: 'in' } : {}), ...(e.who ? { who: String(e.who) } : {}), ...(e.reviewed ? { reviewed: true } : {}), ...(e.forShared ? { forShared: true } : {}), ...(e.tripLink ? { tripLink: String(e.tripLink) } : {}), ...(e.tripSolo ? { tripSolo: true } : {}), ...(e.link ? { link: String(e.link) } : {}), ...(e.solo ? { solo: true } : {}), ...splitOf(e) });
   const ok = e => e && /^\d{4}-\d{2}-\d{2}$/.test(e.date) && +e.amount > 0;
   out.expenses = (b.expenses || []).filter(ok).map(fixE);
   (b.trips || []).forEach(t => {
@@ -122,7 +123,7 @@ function normalize(b) {
   return out;
 }
 function loadLocal() { try { const raw = localStorage.getItem(LKEY); return raw ? normalize(JSON.parse(raw)) : null; } catch (e) { return null; } }
-const metaOf = o => ({ categories: o.categories, incCats: o.incCats, people: o.people, rules: o.rules, lastPerson: o.lastPerson, stmts: o.stmts || [], dismissed: o.dismissed || [], houseAdded: true, name: o.name || '' });
+const metaOf = o => ({ categories: o.categories, incCats: o.incCats, people: o.people, rules: o.rules, lastPerson: o.lastPerson, stmts: o.stmts || [], dismissed: o.dismissed || [], tax: o.tax || {}, houseAdded: true, name: o.name || '' });
 function saveLocal() { if (cloud) return; try { localStorage.setItem(LKEY, JSON.stringify({ v: 3, ...metaOf(S), expenses: S.expenses, trips: S.trips, tripExp: TE })); } catch (e) { toast('Could not save — storage may be full'); } }
 function useLocal() { const L = loadLocal() || normalize(null); TE = L.tripExp; delete L.tripExp; S = L; }
 
@@ -130,7 +131,7 @@ const cat = n => S.categories.find(c => c.name === n) || S.incCats.find(c => c.n
 const trip = id => S.trips.find(t => t.id === id);
 const tripByName = n => S.trips.find(t => t.name.toLowerCase() === String(n).trim().toLowerCase());
 const tripExp = id => TE[id] || [];
-const allExp = () => S.expenses.concat(...Object.values(TE));
+const allExp = () => S.expenses.concat(...Object.values(TE).map(l => l.filter(e => !e.link)));   // trip copies of personal expenses are not separate entries
 const isInc = e => e.type === 'in';
 const inMonth = m => own().filter(e => mk(e.date) === m && !isInc(e) && !isFriend(e) && !e._skip);          // spending only
 const incMonth = m => own().filter(e => mk(e.date) === m && isInc(e) && !isFriend(e) && !e._skip);          // income only
@@ -146,19 +147,30 @@ const catName = n => ([...S.categories, ...S.incCats].find(c => c.name.toLowerCa
 // ================= data writes (local or cloud) =================
 function track(p) { pending++; schedule(); return p.catch(fail).finally(() => { pending--; schedule(); }); }
 function fail(err) { console.error(err); const c = err && err.code || ''; toast(/permission/.test(c) ? 'Not allowed — check Firestore rules' : 'Sync error: ' + (c || err.message), 4500); }
-function strip(e) { const o = { date: e.date, amount: e.amount, cat: e.cat, mode: e.mode, person: e.person, note: e.note || '', ts: e.ts || Date.now() }; if (isInc(e)) o.type = 'in'; if (e.who) o.who = e.who; if (e.reviewed) o.reviewed = true; if (e.forShared && isFriend(e)) o.forShared = true; if (hasSplit(e)) { o.split = e.split; o.splitBy = e.splitBy || 'shares'; o.meShares = e.meShares ?? 1; } if (e.trip) o.trip = e.trip; if (cloud) o.by = user.uid; return o; }
+function strip(e) { const o = { date: e.date, amount: e.amount, cat: e.cat, mode: e.mode, person: e.person, note: e.note || '', ts: e.ts || Date.now() }; if (isInc(e)) o.type = 'in'; if (e.who) o.who = e.who; if (e.reviewed) o.reviewed = true; if (e.forShared && isFriend(e)) o.forShared = true; if (hasSplit(e)) { o.split = e.split; o.splitBy = e.splitBy || 'shares'; o.meShares = e.meShares ?? 1; } if (e.trip) o.trip = e.trip; if (e.tripLink && !e.trip) { o.tripLink = e.tripLink; if (e.tripSolo) o.tripSolo = true; } if (e.link) o.link = e.link; if (e.solo) o.solo = true; if (cloud) o.by = user.uid; return o; }
 function eRef(e) { const F = fb.F; return e.trip ? F.doc(fb.db, 'trips', e.trip, 'expenses', e.id) : F.doc(fb.db, 'users', user.uid, 'expenses', e.id); }
 function collOf(e) { if (!e.trip) return S.expenses; return TE[e.trip] || (TE[e.trip] = []); }
 function localPut(e) { const c = collOf(e), i = c.findIndex(x => x.id === e.id); if (i >= 0) c[i] = e; else c.push(e); }
 function localDel(e) { const c = collOf(e), i = c.findIndex(x => x.id === e.id); if (i >= 0) c.splice(i, 1); }
 function markReviewed(e) { const o = findExp(e.id, e.trip); if (o && o.cat !== e.cat) e.reviewed = true; return e; }
-function putExp(e) { markReviewed(e); localPut(e); if (cloud) track(fb.F.setDoc(eRef(e), strip(e))); else saveLocal(); schedule(); }
-function delExp(e) { localDel(e); if (cloud) track(fb.F.deleteDoc(eRef(e))); else saveLocal(); schedule(); }
+// A personal expense linked to a trip (tripLink) keeps a read-only copy in the trip, so it counts in my
+// spending and in the trip's total/settle-up. Edits always go through the personal entry.
+function mirrorOps(e, old, deleting) {
+  if (e.trip || e.link) return [];
+  const ops = [], was = old && old.tripLink, now = !deleting && !isInc(e) && e.tripLink && trip(e.tripLink) ? e.tripLink : '';
+  if (was && was !== now && trip(was)) ops.push(['del', { id: 'L' + e.id, trip: was }]);
+  if (now) { const t = trip(now); ops.push(['put', { id: 'L' + e.id, trip: now, link: e.id, ts: e.ts, date: e.date, amount: e.amount, cat: e.cat, mode: e.mode, person: meIn(t), note: e.note || '', ...(e.tripSolo ? { solo: true } : {}) }]); }
+  return ops;
+}
+function applyOps(ops, batch) { ops.forEach(([op, m]) => { if (op === 'put') localPut(m); else localDel(m); if (cloud) { const r = eRef(m); if (batch) op === 'put' ? batch.set(r, strip(m)) : batch.delete(r); else track(op === 'put' ? fb.F.setDoc(r, strip(m)) : fb.F.deleteDoc(r)); } }); }
+function putExp(e) { const old = findExp(e.id, e.trip); markReviewed(e); localPut(e); if (cloud) track(fb.F.setDoc(eRef(e), strip(e))); applyOps(mirrorOps(e, old)); if (!cloud) saveLocal(); schedule(); }
+function delExp(e) { const old = findExp(e.id, e.trip); localDel(e); if (cloud) track(fb.F.deleteDoc(eRef(e))); applyOps(mirrorOps(e, old, true)); if (!cloud) saveLocal(); schedule(); }
 function putMany(list, del = false) {
   if (!del) list.forEach(markReviewed);
+  const ops = list.map(e => mirrorOps(e, findExp(e.id, e.trip), del));
   list.forEach(del ? localDel : localPut);
-  if (cloud) { for (let i = 0; i < list.length; i += 400) { const b = fb.F.writeBatch(fb.db); list.slice(i, i + 400).forEach(e => del ? b.delete(eRef(e)) : b.set(eRef(e), strip(e))); track(b.commit()); } }
-  else saveLocal();
+  if (cloud) { for (let i = 0; i < list.length; i += 150) { const b = fb.F.writeBatch(fb.db); list.slice(i, i + 150).forEach((e, j) => { del ? b.delete(eRef(e)) : b.set(eRef(e), strip(e)); applyOps(ops[i + j], b); }); track(b.commit()); } }
+  else { ops.forEach(o => applyOps(o)); saveLocal(); }
   schedule();
 }
 function saveMeta() { if (cloud) track(fb.F.setDoc(fb.F.doc(fb.db, 'users', user.uid), metaOf(S), { merge: true })); else saveLocal(); schedule(); }
@@ -182,7 +194,10 @@ async function removeTrip(t) {
       catch (e) { return fail(e); }
     }
   }
-  S.trips = S.trips.filter(x => x.id !== t.id); delete TE[t.id]; saveLocal(); curTrip = null; schedule();
+  const linked = S.expenses.filter(e => e.tripLink === t.id);
+  S.trips = S.trips.filter(x => x.id !== t.id); delete TE[t.id];
+  if (linked.length) putMany(linked.map(e => { const x = { ...e }; delete x.tripLink; return x; }));
+  saveLocal(); curTrip = null; schedule();
 }
 
 // ================= Firebase =================
@@ -224,7 +239,7 @@ function startCloud() {
     schedule();
   }, fail));
 }
-function normalizeE(d) { const x = d.data(); return { id: d.id, ts: +x.ts || 0, date: x.date, amount: +x.amount, cat: x.cat || 'Other', mode: x.mode || 'UPI', person: x.person || '', note: x.note || '', by: x.by, ...(x.type === 'in' ? { type: 'in' } : {}), ...(x.who ? { who: x.who } : {}), ...(x.reviewed ? { reviewed: true } : {}), ...(x.forShared ? { forShared: true } : {}), ...(Array.isArray(x.split) && x.split.length ? { split: x.split, splitBy: x.splitBy || 'shares', meShares: x.meShares ?? 1 } : {}) }; }
+function normalizeE(d) { const x = d.data(); return { id: d.id, ts: +x.ts || 0, date: x.date, amount: +x.amount, cat: x.cat || 'Other', mode: x.mode || 'UPI', person: x.person || '', note: x.note || '', by: x.by, ...(x.type === 'in' ? { type: 'in' } : {}), ...(x.who ? { who: x.who } : {}), ...(x.reviewed ? { reviewed: true } : {}), ...(x.forShared ? { forShared: true } : {}), ...(x.tripLink ? { tripLink: x.tripLink } : {}), ...(x.tripSolo ? { tripSolo: true } : {}), ...(x.link ? { link: x.link } : {}), ...(x.solo ? { solo: true } : {}), ...(Array.isArray(x.split) && x.split.length ? { split: x.split, splitBy: x.splitBy || 'shares', meShares: x.meShares ?? 1 } : {}) }; }
 function migrateLocal(fresh) {
   if (migrated) return; migrated = true;
   const L = loadLocal(); if (!L) return;
@@ -300,9 +315,9 @@ const peopleFor = t => t ? (trip(t) || {}).members || [myName()] : S.people;
 const opts = (list, sel) => list.map(p => `<option ${p === sel ? 'selected' : ''}>${esc(p)}</option>`).join('');
 
 function itemHTML(e, showDay) {
-  const c = cat(e.cat), t = e.trip && trip(e.trip), spl = !e._mine && !e._share && hasSplit(e);
+  const c = cat(e.cat), t = (e.trip && trip(e.trip)) || (e.tripLink && trip(e.tripLink)), spl = !e._mine && !e._share && hasSplit(e);
   const sm = multi && view === 'list', on = sm && picked.has(e.id);
-  return `<div class="item${on ? ' picked' : ''}" data-id="${esc(e.id)}" data-trip="${e.trip || ''}">${sm ? `<span class="tick">${on ? '✓' : ''}</span>` : ''}<div class="ic" ${sm ? '' : 'data-ic="1"'} style="background:${c.color}22">${c.icon}</div><div class="mid"><div class="t">${esc(e.note || c.name)}</div><div class="s">${esc(c.name)}${e.who ? (isInc(e) ? ' from ' : ' · ') + esc(e.who) : ''}${spl ? ` · <span class="splt">➗ you ${money(myShare(e))}</span>` : e._mine ? ' · your share' : e._share ? ' · split share' : ''}${e.forShared && isInc(e) ? ' · shared costs' : ''}${!isFriend(e) && countsOf(e) === 'skip' ? ' · not counted' : ''} · ${e.mode} · ${esc(e.person)}${t && view !== 'trips' ? ' · ✈ ' + esc(t.name) : ''}${showDay ? ' · ' + dayLabel(e.date) : ''}</div></div><div class="a${isInc(e) ? ' inc' : ''}">${isInc(e) ? '+' : ''}${money(e.amount)}</div></div>`;
+  return `<div class="item${on ? ' picked' : ''}" data-id="${esc(e.id)}" data-trip="${e.trip || ''}">${sm ? `<span class="tick">${on ? '✓' : ''}</span>` : ''}<div class="ic" ${sm ? '' : 'data-ic="1"'} style="background:${c.color}22">${c.icon}</div><div class="mid"><div class="t">${esc(e.note || c.name)}</div><div class="s">${esc(c.name)}${e.who ? (isInc(e) ? ' from ' : ' · ') + esc(e.who) : ''}${spl ? ` · <span class="splt">➗ you ${money(myShare(e))}</span>` : e._mine ? ' · your share' : e._share ? ' · split share' : ''}${e.forShared && isInc(e) ? ' · shared costs' : ''}${!isFriend(e) && countsOf(e) === 'skip' ? ' · not counted' : ''} · ${e.mode} · ${esc(e.person)}${t && view !== 'trips' ? ' · ✈ ' + esc(t.name) : ''}${e.link ? (findExp(e.link, '') ? ' · 🔗 from your expenses' : ' · 🔗 from their expenses') : ''}${e.solo || (e.tripLink && e.tripSolo && view !== 'trips') ? ' · just mine' : ''}${showDay ? ' · ' + dayLabel(e.date) : ''}</div></div><div class="a${isInc(e) ? ' inc' : ''}">${isInc(e) ? '+' : ''}${money(e.amount)}</div></div>`;
 }
 function groupedHTML(rows) {
   const g = {}; rows.forEach(e => (g[e.date] = g[e.date] || []).push(e));
@@ -312,6 +327,8 @@ document.addEventListener('click', ev => {
   const it = ev.target.closest('.item[data-id]'); if (!it) return;
   if (longPressed) { longPressed = false; return; }
   if (multi && view === 'list') { togglePick(it.dataset.id); return; }
+  const m = findExp(it.dataset.id, it.dataset.trip);
+  if (m && m.link) { if (findExp(m.link, '')) return ev.target.closest('[data-ic]') ? openCatSheet(m.link, '') : startEdit(m.link, ''); return toast("This was added from a member's own expenses — they can edit it", 3500); }
   if (ev.target.closest('[data-ic]')) openCatSheet(it.dataset.id, it.dataset.trip); else startEdit(it.dataset.id, it.dataset.trip);
 });
 
@@ -351,7 +368,8 @@ $('#splitList').addEventListener('click', e => {
 });
 $('#splitList').addEventListener('input', e => { const i = e.target.dataset.si; if (i === undefined) return; const r = SPL.rows[+i]; if (e.target.dataset.sk === 'who') r.who = e.target.value; else r.amount = r2(parseFloat(e.target.value) || 0); renderSplit(false); });
 $('#amt').addEventListener('input', () => renderSplit(false));
-$('#fFor').addEventListener('change', () => renderSplit(true));
+$('#fFor').addEventListener('change', () => { renderSplit(true); $('#linkWrap').classList.toggle('hidden', selType === 'in' || !!$('#fFor').value || !S.trips.length); $('#soloWrap').classList.toggle('hidden', $('#linkWrap').classList.contains('hidden') || !$('#fLink').value); });
+$('#fLink').addEventListener('change', () => $('#soloWrap').classList.toggle('hidden', !$('#fLink').value));
 function splitFromForm() {
   if (!SPL.on || !splitAllowed()) return { ok: true, data: null };
   const c = splitCalc(), rows = SPL.rows.map(r => ({ ...r, who: r.who.trim() })).filter(r => r.who || r.amount);
@@ -431,6 +449,9 @@ function renderAdd() {
   const inc = selType === 'in', cur = inc ? selInc : selCat;
   $$('#typeSeg button').forEach(b => b.classList.toggle('on', b.dataset.t === selType));
   $('#forWrap').classList.toggle('hidden', inc); if (inc) $('#fFor').value = '';
+  const lv = $('#fLink').value; $('#fLink').innerHTML = '<option value="">No</option>' + tripsSorted().map(t => `<option value="${t.id}" ${t.id === lv ? 'selected' : ''}>✈ ${esc(t.name)}</option>`).join('');
+  $('#linkWrap').classList.toggle('hidden', inc || !!$('#fFor').value || !S.trips.length);
+  $('#soloWrap').classList.toggle('hidden', $('#linkWrap').classList.contains('hidden') || !$('#fLink').value);
   $('#personLbl').textContent = inc ? 'Received by' : 'Paid by';
   $('#amtSign').textContent = inc ? '+₹' : '₹';
   $('#note').placeholder = inc ? 'Where is it from?' : 'What was it for?';
@@ -460,7 +481,7 @@ $('#manualBtn').onclick = () => { const on = $('#f').classList.contains('hidden'
 function startEdit(id, t) {
   const e = findExp(id, t); if (!e) return;
   edit = { id, trip: t || '' }; go('add');
-  $('#fFor').value = t || ''; $('#amt').value = e.amount; selType = isInc(e) ? 'in' : 'out'; if (isInc(e)) selInc = e.cat; else selCat = e.cat; selMode = e.mode; $('#date').value = e.date; $('#note').value = e.note || ''; $('#who').value = e.who || '';
+  $('#fFor').value = t || ''; $('#amt').value = e.amount; selType = isInc(e) ? 'in' : 'out'; if (isInc(e)) selInc = e.cat; else selCat = e.cat; selMode = e.mode; $('#date').value = e.date; $('#note').value = e.note || ''; $('#who').value = e.who || ''; renderAdd(); $('#fLink').value = e.tripLink || ''; $('#fSolo').checked = !!e.tripSolo; $('#soloWrap').classList.toggle('hidden', !e.tripLink);
   SPL = hasSplit(e) ? { on: true, by: e.splitBy || 'shares', me: e.meShares ?? 1, rows: e.split.map(x => ({ who: x.who, amount: x.amount, shares: x.shares || 1 })) } : { on: false, by: 'shares', me: 1, rows: [] };
   renderAdd(); fillPerson(e.person);
   $('#saveBtn').textContent = 'Update expense'; $('#editBtns').classList.remove('hidden'); openForm(true);
@@ -477,10 +498,15 @@ $('#f').onsubmit = ev => {
   const who = $('#who').value.trim();
   if (data.cat === OWE_OUT || data.cat === OWE_IN) { if (!who) { $('#who').focus(); return toast("Enter your friend's name"); } data.who = who; }
   const sp = splitFromForm(); if (!sp.ok) return toast(sp.msg, 3500); if (sp.data) Object.assign(data, sp.data);
+  if (!inc && !forT && $('#fLink').value) { data.tripLink = $('#fLink').value; if ($('#fSolo').checked) data.tripSolo = true; }
+  if (forT && !inc) { const t = trip(forT); if (t && data.person === meIn(t)) { data.tripLink = forT; data.person = S.people.includes(S.lastPerson) ? S.lastPerson : S.people[0]; return saveForm(data, '', inc); } }
+  return saveForm(data, forT, inc);
+};
+function saveForm(data, forT, inc) {
   let changed = null, e;
   if (edit) {
     const old = findExp(edit.id, edit.trip); if (!old) { resetForm(); return; }
-    e = { ...old, ...data }; delete e.trip; delete e.type; if (!data.who) delete e.who; if (!data.split) { delete e.split; delete e.splitBy; delete e.meShares; } if (inc) e.type = 'in'; if (forT) e.trip = forT;
+    e = { ...old, ...data }; delete e.trip; delete e.type; if (!data.who) delete e.who; if (!data.tripLink) delete e.tripLink; if (!data.tripSolo) delete e.tripSolo; if (!data.split) { delete e.split; delete e.splitBy; delete e.meShares; } if (inc) e.type = 'in'; if (forT) e.trip = forT;
     if ((old.trip || '') !== forT) delExp(old);
     if (old.cat !== data.cat && !isFriend(e)) changed = e;
     putExp(e); toast(data.split ? `Updated · your share ${money(myShare(e))}` : 'Updated');
@@ -492,7 +518,7 @@ $('#f').onsubmit = ev => {
   if (!forT && !inc) budgetCheck(data.cat, mk(data.date));
   const wasEdit = !!edit; resetForm();
   if (changed) offerRemember(changed); else if (wasEdit) openForm(false); else $('#amt').focus();
-};
+}
 function budgetCheck(n, m) { const c = cat(n); if (!c.budget) return; const sp = sum(inMonth(m).filter(e => e.cat === n)); const p = sp / c.budget; if (p >= 1) toast(`⚠️ ${c.name} is over budget: ${money(sp)} of ${money(c.budget)}`, 4000); else if (p >= .8) toast(`${c.name} at ${Math.round(p * 100)}% of budget`, 3500); }
 
 // ---------- Expenses list ----------
@@ -537,6 +563,19 @@ $('#selBar').onclick = ev => {
     case 'all': if (picked.size === listRows.length) picked.clear(); else listRows.forEach(e => picked.add(e.id)); return renderList();
     case 'note': return bulkNote(sel);
     case 'cat': return bulkCat(sel);
+    case 'trip': {
+      const spends = sel.filter(e => !isInc(e)); if (!spends.length) return toast('Select spends to add to a trip');
+      if (!S.trips.length) return toast('Create a trip first (Trips tab)');
+      return openSheet(`<h3>Show ${spends.length} spend${spends.length > 1 ? 's' : ''} in a trip</h3><p class="muted" style="margin-top:2px">They stay in your spending and also count in the trip's total and settle-up. Edit them here — the trip updates too.</p>
+        <div class="seg" id="tpSolo" style="margin:12px 0 0"><button type="button" data-solo="0" class="on">Shared with the group</button><button type="button" data-solo="1">Just my cost</button></div>
+        <p class="muted" id="tpTxt" style="margin:6px 0 0">Split in the trip's settle-up, e.g. a hotel or cab you paid for everyone.</p>
+        <div class="chips" style="margin-top:10px">${tripsSorted().map(t => `<button class="chip" data-tp="${t.id}">✈ ${esc(t.name)}</button>`).join('')}<button class="chip" data-tp="">✕ Not in a trip</button></div>`, ev => {
+        const so = ev.target.closest('[data-solo]'); if (so) { $$('#tpSolo button').forEach(x => x.classList.toggle('on', x === so)); $('#tpTxt').textContent = so.dataset.solo === '1' ? "Counts in the trip total but isn't split, e.g. your own trek fee or train ticket." : "Split in the trip's settle-up, e.g. a hotel or cab you paid for everyone."; return; }
+        const b = ev.target.closest('[data-tp]'); if (!b) return; const id = b.dataset.tp, solo = $('#tpSolo [data-solo="1"]').classList.contains('on');
+        putMany(spends.map(e => { const x = { ...e }; if (id) { x.tripLink = id; if (solo) x.tripSolo = true; else delete x.tripSolo; } else { delete x.tripLink; delete x.tripSolo; } return x; })); closeSheet(); setSelMode(false);
+        toast(id ? `${spends.length} added to ${trip(id).name}` : 'Removed from trip');
+      });
+    }
     case 'friend': setSelMode(false); return askFriend('Paid for a friend?', `Spends become “paid for friend”, credits become “friend paid back”. Neither counts in your own spending or income. ${sel.length} selected.`, (n, sh) => markFriend(sel, n, sh), sel.some(isInc));
     case 'del': if (!confirm(`Delete ${sel.length} entr${sel.length > 1 ? 'ies' : 'y'}?`)) return; putMany(sel, true); toast(`Deleted ${sel.length}`); return setSelMode(false);
   }
@@ -601,13 +640,13 @@ function bulkCat(sel) {
 
 // ---------- Trips ----------
 function settle(t) {
-  const ex = tripExp(t.id), tot = sum(ex), mem = t.members.length ? t.members : [myName()], share = tot / mem.length;
+  const all = tripExp(t.id), ex = all.filter(e => !e.solo), tot = sum(all), mem = t.members.length ? t.members : [myName()], share = sum(ex) / mem.length;
   const paid = {}; mem.forEach(p => paid[p] = 0); ex.forEach(e => paid[e.person] = (paid[e.person] || 0) + e.amount);
   const bal = Object.keys(paid).map(p => ({ p, b: paid[p] - (mem.includes(p) ? share : 0) }));
   const cr = bal.filter(x => x.b > .5).sort((a, b) => b.b - a.b).map(x => ({ ...x })), db = bal.filter(x => x.b < -.5).map(x => ({ p: x.p, b: -x.b })).sort((a, b) => b.b - a.b);
   const tx = []; let i = 0, j = 0;
   while (i < db.length && j < cr.length) { const v = Math.min(db[i].b, cr[j].b); tx.push([db[i].p, cr[j].p, v]); db[i].b -= v; cr[j].b -= v; if (db[i].b < .5) i++; if (cr[j].b < .5) j++; }
-  return { tot, share, paid, tx, mem };
+  return { tot, share, paid, tx, mem, solo: sum(all.filter(e => e.solo)) };
 }
 function renderTrips() {
   const t = curTrip && trip(curTrip); // a just-joined trip may arrive a moment later, so keep curTrip
@@ -635,7 +674,7 @@ function tripDetailHTML(t) {
   ${st.mem.length > 1 ? `<div class="card"><div class="label" style="margin-top:0">Settle up</div>
     ${Object.keys(st.paid).map(n => `<div class="settle"><span>${esc(n)} paid ${money(st.paid[n])}</span><b class="${st.paid[n] - (st.mem.includes(n) ? st.share : 0) >= 0 ? 'down' : 'up'}">${(st.paid[n] - (st.mem.includes(n) ? st.share : 0)) >= 0 ? '+' : '−'}${money(Math.abs(st.paid[n] - (st.mem.includes(n) ? st.share : 0)))}</b></div>`).join('')}
     <div class="label">Who pays whom</div>${st.tx.length ? st.tx.map(([a, b, v]) => `<div class="settle"><span>${esc(a)} → ${esc(b)}</span><b>${money(v)}</b></div>`).join('') : '<div class="muted">All settled 🎉</div>'}
-    <p class="muted" style="margin-bottom:0">Split equally among ${st.mem.length} people.</p></div>` : ''}
+    <p class="muted" style="margin-bottom:0">Split equally among ${st.mem.length} people.${st.solo ? ` ${money(st.solo)} marked “just mine” isn't split.` : ''}</p></div>` : ''}
   ${cats.length ? `<div class="card"><div class="label" style="margin-top:0">By category</div>${cats.map(n => { const c = cat(n); return `<div style="margin:6px 0"><div class="row"><span>${c.icon} ${esc(n)}</span><b style="text-align:right">${money(byCat[n])}</b></div><div class="bar"><i style="width:${byCat[n] / st.tot * 100}%;background:${c.color}"></i></div></div>`; }).join('')}</div>` : ''}
   ${ex.length ? groupedHTML(ex) : '<div class="empty">No expenses in this trip yet.</div>'}`;
 }
@@ -719,6 +758,7 @@ function renderStats() {
   renderInvest(k, all.filter(isInvest), income);
   renderFriends();
   renderRecurring();
+  renderTax();
   renderBars(k);
   renderFact($('#factStats'), k);
   renderBudgets(all, Y ? 12 : 1);
@@ -818,6 +858,92 @@ function renderRecurring() {
     ${spend.map(row).join('')}${inv.length ? `<div class="label">Regular investments</div>${inv.map(row).join('')}` : ''}<p class="muted" style="margin-bottom:0">Tap one to see all its payments.</p>`;
 }
 document.addEventListener('click', ev => { const r = ev.target.closest('[data-rec]'); if (r) { go('list'); pmode = 'year'; $('#fType').value = ''; $('#fCat').value = ''; $('#fPerson').value = ''; $('#fSearch').value = r.dataset.rec; render(); } });
+// ================= income tax estimate (India, FY Apr–Mar) =================
+// FY 2026-27 rules: new regime slabs 0–4L nil, 5/10/15/20/25/30% per ₹4L, ₹75k standard deduction, rebate up to ₹60k
+// (no tax on slab income up to ₹12L) with marginal relief; old regime 2.5L/5L/10L slabs, ₹50k SD, ₹12.5k rebate up to ₹5L.
+// Equity STCG 20%, LTCG 12.5% above ₹1.25L; 4% cess. Surcharge (income > ₹50L) is not modelled.
+const fyOf = m => { const [y, mo] = m.split('-').map(Number); return mo >= 4 ? y : y - 1; };
+const fyLabel = y => `FY ${y}-${String(y + 1).slice(2)}`;
+function slabTax(x, slabs) { let t = 0, lo = 0; for (const [hi, r] of slabs) { if (x > lo) t += (Math.min(x, hi) - lo) * r; lo = hi; } return t; }
+const NEW_SLABS = [[4e5, 0], [8e5, .05], [12e5, .10], [16e5, .15], [20e5, .20], [24e5, .25], [Infinity, .30]];
+const OLD_SLABS = [[2.5e5, 0], [5e5, .05], [10e5, .20], [Infinity, .30]];
+function taxCalc(regime, d) {
+  const isNew = regime === 'new', sd = d.gross > 0 ? Math.min(d.gross, isNew ? 75000 : 50000) : 0;
+  let ded = 0;
+  if (!isNew) ded = Math.min(+d.c80 || 0, 150000) + (+d.d80 || 0) + (+d.hra || 0) + Math.min(+d.home || 0, 200000) + Math.min(+d.nps || 0, 50000) + Math.min(d.interest, 10000) + (+d.other || 0);
+  const normal = Math.max(0, d.gross - sd + d.dividend + d.interest + d.otherInc - ded);
+  const stcg = Math.max(0, +d.stcg || 0), ltcg = Math.max(0, (+d.ltcg || 0) - 125000), total = normal + stcg + (+d.ltcg || 0);
+  let slab = slabTax(normal, isNew ? NEW_SLABS : OLD_SLABS), rebate = 0;
+  if (isNew) {
+    if (total <= 12e5) rebate = Math.min(slab, 60000);
+    else if (normal > 12e5 && slab > normal - 12e5) rebate = slab - (normal - 12e5);   // marginal relief just above ₹12L
+  } else if (total <= 5e5) rebate = Math.min(slab, 12500);
+  const cg = stcg * .20 + ltcg * .125, base = Math.max(0, slab - rebate) + cg, cess = base * .04;
+  return { sd, ded, normal, stcg, ltcg, slab: r2(slab), rebate: r2(rebate), cg: r2(cg), cess: r2(cess), tax: Math.round(base + cess) };
+}
+const TAXPAY_RE = /cbdt|income ?tax|advance ?tax|self ?assess|itns|tin ?2/i;
+function taxData(fy) {
+  const from = `${fy}-04-01`, to = `${fy + 1}-03-31`, inFy = e => e.date >= from && e.date <= to, all = own().filter(inFy);
+  const counted = all.filter(e => isInc(e) && !isFriend(e) && !e._skip && countsOf(e) === 'income');
+  const sumC = re => r2(sum(counted.filter(e => re.test(e.cat))));
+  const salary = sumC(/salary/i), dividend = sumC(/dividend/i), interest = sumC(/^interest/i), otherInc = r2(sum(counted.filter(e => !/salary|dividend|^interest/i.test(e.cat))));
+  const months = [...new Set(counted.filter(e => /salary/i.test(e.cat)).map(e => mk(e.date)))].length;
+  const pays = S.expenses.filter(e => inFy(e) && !isInc(e) && (TAXPAY_RE.test(e.note) || /tax/i.test(e.cat) && TAXPAY_RE.test(e.note)));
+  return { from, to, salary, months, dividend, interest, otherInc, pays };
+}
+function taxInputs(fy) { return { ...((S.tax || {})[fy] || {}) }; }
+function renderTax() {
+  const box = $('#taxBox'); if (!box) return;
+  const fy = fyOf(pKey().length === 4 ? (pKey() === mk(today()).slice(0, 4) ? mk(today()) : pKey() + '-12') : pKey()), D = taxData(fy), I = taxInputs(fy);
+  const now = today(), elapsed = now < D.from ? 0 : now > D.to ? 12 : (() => { const [y, m] = now.split('-').map(Number); return (y - fy) * 12 + m - 3; })();
+  const projTake = D.months ? Math.round(D.salary / D.months * 12) : 0;
+  const gross = +I.gross || 0, rough = !gross;
+  const paid = r2((+I.tds || 0) + sum(D.pays.filter(e => (I.paid || []).includes(e.id))));
+  const d = { gross: gross || projTake, dividend: I.dividend !== undefined && I.dividend !== '' ? +I.dividend : D.dividend, interest: I.interest !== undefined && I.interest !== '' ? +I.interest : D.interest, otherInc: I.otherInc !== undefined && I.otherInc !== '' ? +I.otherInc : 0, stcg: +I.stcg || 0, ltcg: +I.ltcg || 0, c80: +I.c80 || 0, d80: +I.d80 || 0, hra: +I.hra || 0, home: +I.home || 0, nps: +I.nps || 0, other: +I.other || 0 };
+  if (!d.gross && !d.dividend && !d.interest) { box.innerHTML = `<div class="muted">${fyLabel(fy)}: no salary or income found yet. Tap <b>Enter details</b> to add your gross salary from your payslip.</div><button class="small" data-tax="edit" style="margin-top:8px">Enter details</button>`; return; }
+  const N = taxCalc('new', d), O = taxCalc('old', d), best = N.tax <= O.tax ? 'new' : 'old', B = best === 'new' ? N : O, due = Math.round(B.tax - paid);
+  const left = Math.max(0, 12 - elapsed), perMonth = due > 0 && left ? Math.ceil(due / left / 100) * 100 : 0;
+  const row = (a, b, cls = '') => `<div class="settle ${cls}"><span>${a}</span><b>${String(b).replace(/\.\d+$/, '')}</b></div>`;
+  box.innerHTML = `<div class="muted">${fyLabel(fy)} · estimate${rough ? ' (rough — uses your take-home pay)' : ''}</div>
+    <div class="big" style="font-size:26px">${money(B.tax)} <span class="muted" style="font-size:14px;font-weight:400">tax for the year · ${best} regime</span></div>
+    <div class="muted">${best === 'new' ? 'New' : 'Old'} regime saves ${money(Math.abs(O.tax - N.tax))} (new ${money(N.tax)} · old ${money(O.tax)})</div>
+    <div class="chk ${due > 0 ? 'bad' : 'ok'}" style="margin-top:10px">${paid ? `Paid so far ${money(paid)} (TDS${(I.paid || []).length ? ' + tax payments' : ''}). ` : 'No TDS entered yet. '}${due > 0 ? `<b>${money(due)} more to pay</b>${perMonth ? ` — set aside about ${money(perMonth)} a month` : ''}.${due > 10000 && elapsed < 12 ? ' Above ₹10,000, advance tax is due in instalments (15 Jun, 15 Sep, 15 Dec, 15 Mar) unless your employer deducts it.' : ''}` : due < 0 ? `<b>About ${money(-due)} refund</b> when you file.` : '<b>All covered.</b>'}</div>
+    ${rough ? `<p class="muted" style="margin:8px 0 0">Your salary credits are take-home (after TDS and PF), so this guess is low. Enter your <b>gross salary</b> from your payslip for a real estimate.</p>` : ''}
+    <div class="label">How it's worked out (${best} regime)</div>
+    ${row(`Salary ${gross ? '(gross, entered)' : `(take-home ${D.months ? `${money(D.salary)} in ${D.months} months → ${money(projTake)}/yr` : ''})`}`, money(d.gross))}
+    ${row('− Standard deduction', money(B.sd))}
+    ${d.dividend ? row('+ Dividends', money(d.dividend)) : ''}${d.interest ? row('+ Bank interest', money(d.interest)) : ''}${d.otherInc ? row('+ Other taxable income', money(d.otherInc)) : ''}
+    ${best === 'old' && B.ded ? row('− Deductions (80C, 80D, HRA…)', money(B.ded)) : ''}
+    ${row('Taxable income (slab)', money(B.normal))}${d.stcg ? row('Short-term gains (20%)', money(d.stcg)) : ''}${d.ltcg ? row('Long-term gains (12.5% above ₹1.25L)', money(d.ltcg)) : ''}
+    ${row('Slab tax', money(B.slab))}${B.rebate ? row('− Rebate (87A)', money(B.rebate)) : ''}${B.cg ? row('+ Capital gains tax', money(B.cg)) : ''}${row('+ Cess 4%', money(B.cess))}
+    ${row('Tax for the year', money(B.tax), 'tot')}
+    <button class="small" data-tax="edit" style="margin-top:10px">${rough ? 'Enter gross salary & TDS' : 'Edit details'}</button>
+    <p class="muted" style="margin-bottom:0">An estimate, not tax advice — check with your Form 16 / a tax advisor before filing. Surcharge (income over ₹50L) isn't included.</p>`;
+  box.dataset.fy = fy;
+}
+function openTaxForm(fy) {
+  const D = taxData(fy), I = taxInputs(fy), v = k => I[k] ?? '';
+  const f = (k, label, hint, ph = '') => `<label>${label}<input type="number" inputmode="decimal" min="0" data-tk="${k}" value="${v(k)}" placeholder="${ph}"></label>${hint ? `<div class="muted" style="font-size:12px;margin-top:2px">${hint}</div>` : ''}`;
+  openSheet(`<h3>Tax details · ${fyLabel(fy)}</h3><p class="muted" style="margin-top:2px">Only what Trickle can't see in your statements. Leave anything you don't have blank.</p>
+    <div class="label">From your payslip</div>
+    ${f('gross', 'Gross salary for the year (₹)', `Monthly gross × 12 + bonus. Your take-home so far: ${money(D.salary)}${D.months ? ` in ${D.months} months` : ''}.`)}
+    ${f('tds', 'TDS deducted by employer this year (₹)', 'Total for the year (monthly TDS × 12), or what Form 26AS shows so far.')}
+    <div class="label">Found in your statements — change if needed</div>
+    ${f('dividend', 'Dividends (₹)', '', String(D.dividend))}${f('interest', 'Savings / FD interest (₹)', '', String(D.interest))}${f('otherInc', 'Other taxable income (₹)', 'Freelance, rent received etc. Gifts from family are not taxable.', '0')}
+    ${D.pays.length ? `<div class="label">Tax you paid yourself</div>${D.pays.map(e => `<label class="pvrow" style="padding:8px 0"><input type="checkbox" data-tpaid="${e.id}" ${(I.paid || []).includes(e.id) ? 'checked' : ''}><span class="mid"><span class="t">${esc(e.note)} · ${money(e.amount)}</span><span class="s">${niceDate(e.date)}${e.date.slice(5) <= '07-31' ? ' · probably for last year (ITR due 31 Jul)' : ''}</span></span></label>`).join('')}` : ''}
+    <div class="label">Shares & mutual funds (from Zerodha / broker P&L)</div>
+    ${f('stcg', 'Short-term gains — equity held < 1 year (₹)', '')}${f('ltcg', 'Long-term gains — equity held > 1 year (₹)', 'The first ₹1.25 lakh is tax-free.')}
+    <div class="label">Old regime only</div>
+    ${f('c80', '80C — EPF, PPF, ELSS, insurance, tuition (₹)', 'Up to ₹1.5 lakh. Your EPF contribution is on your payslip.')}${f('d80', '80D — health insurance (₹)', '')}${f('hra', 'HRA exemption (₹)', '')}${f('home', 'Home loan interest (₹)', 'Up to ₹2 lakh.')}${f('nps', 'NPS 80CCD(1B) (₹)', 'Up to ₹50,000.')}${f('other', 'Other deductions incl. professional tax (₹)', '')}
+    <button class="primary" id="taxSave">Save</button><button style="width:100%;margin-top:8px" id="taxNo">Cancel</button>`, ev => {
+    if (ev.target.id === 'taxNo') return closeSheet();
+    if (ev.target.id !== 'taxSave') return;
+    const o = {}; $$('#sheet [data-tk]').forEach(i => { if (i.value !== '') o[i.dataset.tk] = +i.value; });
+    o.paid = $$('#sheet [data-tpaid]').filter(i => i.checked).map(i => i.dataset.tpaid);
+    S.tax = { ...(S.tax || {}), [fy]: o }; saveMeta(); closeSheet(); toast('Tax details saved');
+  });
+}
+document.addEventListener('click', ev => { const b = ev.target.closest('[data-tax]'); if (b) openTaxForm(+$('#taxBox').dataset.fy || fyOf(mk(today()))); });
 let openFriend = null;
 function renderFriends() {
   const L = friendLedger(), fs = Object.values(L).filter(f => f.list.length);
@@ -1144,6 +1270,8 @@ function destOf(e, target) { if (target) return target; if (e.tripName) { const 
 function showPreview(res, target) {
   const t = target && trip(target);
   if (target) res.list = res.list.filter(e => !isInc(e));
+  const linkTo = target && res.kind === 'bank' ? target : '';   // my own bank spends: keep in my spending, show in the trip
+  if (linkTo) target = '';
   if (!res.list.length) return toast('No spends found for this trip', 3500);
   const existing = {}; const seen = dest => existing[dest] || (existing[dest] = { ids: new Set((dest && !dest.startsWith('new:') ? tripExp(dest) : dest ? [] : S.expenses).map(x => x.id)), sigs: new Set((dest && !dest.startsWith('new:') ? tripExp(dest) : dest ? [] : S.expenses).map(sig)) });
   const rows = res.list.sort((a, b) => b.date.localeCompare(a.date)).map(e => {
@@ -1151,13 +1279,13 @@ function showPreview(res, target) {
     const xfer = res.kind === 'bank' && (isInc(e) ? OWN_IN_RE : TRANSFER_RE).test(e.raw || e.note), out = t && t.start && (e.date < t.start || e.date > (t.end || t.start));
     return { e, dest, dup, on: !dup && !xfer && !out, why: dup ? 'Already added' : xfer ? (isInc(e) ? 'Looks like money from your own account' : 'Looks like a card bill or transfer') : out ? 'Outside trip dates' : '' };
   });
-  const people = peopleFor(target);
-  PV = { kind: res.kind, bal: res.bal, target, rows, person: target ? (people.includes(meIn(t)) ? meIn(t) : people[0]) : (people.includes(S.lastPerson) ? S.lastPerson : people[0]) };
+  const people = peopleFor(target || linkTo);
+  PV = { kind: res.kind, bal: res.bal, target, linkTo, rows, person: target ? (people.includes(meIn(t)) ? meIn(t) : people[0]) : linkTo ? S.lastPerson : (people.includes(S.lastPerson) ? S.lastPerson : people[0]) };
   const nIn = rows.filter(x => isInc(x.e)).length, nOut = rows.length - nIn;
   openSheet(`<h3>${nOut ? nOut + ' spend' + (nOut > 1 ? 's' : '') : ''}${nOut && nIn ? ' and ' : ''}${nIn ? nIn + ' income' : ''} found</h3>
-    ${res.kind === 'bank' && !target ? balanceHTML(res.bal) : ''}
-    <div class="muted">Adding to <b>${t ? '✈ ' + esc(t.name) : res.kind === 'csv' && rows.some(r => r.dest) ? 'personal expenses and trips in the file' : 'personal expenses'}</b>. Untick anything that isn't a real expense.</div>
-    ${res.kind === 'bank' ? `<label>${nIn ? 'Paid / received by' : 'Paid by'}<select id="pvPerson">${opts(people, PV.person)}</select></label>` : ''}
+    ${res.kind === 'bank' && !target && !linkTo ? balanceHTML(res.bal) : ''}
+    <div class="muted">Adding to <b>${linkTo ? 'your spending, also shown in ✈ ' + esc(t.name) : t ? '✈ ' + esc(t.name) : res.kind === 'csv' && rows.some(r => r.dest) ? 'personal expenses and trips in the file' : 'personal expenses'}</b>. Untick anything that isn't a real expense.</div>
+    ${res.kind === 'bank' && !linkTo ? `<label>${nIn ? 'Paid / received by' : 'Paid by'}<select id="pvPerson">${opts(people, PV.person)}</select></label>` : ''}
     <div class="seg pvf" style="margin:12px 0 0"><button type="button" data-f="all" class="on">All <span></span></button><button type="button" data-f="on">To import <span></span></button><button type="button" data-f="off">Skipped <span></span></button></div>
     <div class="pv">${rows.map((x, i) => { const c = cat(x.e.cat); return `<label class="pvrow ${x.on ? '' : 'off'}"><input type="checkbox" data-i="${i}" ${x.on ? 'checked' : ''} ${x.dup ? 'disabled' : ''}><span class="ic" style="background:${c.color}22;width:30px;height:30px;font-size:15px">${c.icon}</span><span class="mid"><span class="t">${esc(x.e.note || c.name)}</span><span class="s">${niceDate(x.e.date)} · ${esc(c.name)}${x.e.tripName && !target ? ' · ✈ ' + esc(x.e.tripName) : ''}${x.why ? ` · <span class="why">${x.why}</span>` : ''}</span></span><span class="a${isInc(x.e) ? ' inc' : ''}">${isInc(x.e) ? '+' : ''}${money(x.e.amount)}</span></label>`; }).join('')}</div>
     <button class="primary" id="pvGo"></button><button style="width:100%;margin-top:8px" id="pvCancel">Cancel</button>`, ev => {
@@ -1177,6 +1305,7 @@ function doImport() {
     const e = { ...src }; delete e.raw; delete e.tripName;
     if (dest.startsWith('new:')) { const name = dest.slice(4); if (!newTrips[name]) { newTrips[name] = { id: newTripId(), name, start: '', end: '', budget: 0, members: [] }; } dest = newTrips[name].id; }
     if (PV.kind === 'bank') e.person = PV.person;
+    if (PV.linkTo) { e.tripLink = PV.linkTo; e.person = S.people.includes(S.lastPerson) ? S.lastPerson : S.people[0]; }
     if (dest) { e.trip = dest; const t = newTrips[Object.keys(newTrips).find(k => newTrips[k].id === dest)] || trip(dest); if (!e.person) e.person = t.members[0] || myName(); if (t && !t.members.includes(e.person)) { t.members.push(e.person); t._dirty = true; } }
     else { delete e.trip; if (!e.person) e.person = S.lastPerson; if (!S.people.includes(e.person)) { S.people.push(e.person); metaChanged = true; } }
     if (isInc(e) ? ensureIncCat(e.cat) : ensureCat(e.cat)) metaChanged = true;
@@ -1184,12 +1313,12 @@ function doImport() {
   });
   Object.values(newTrips).forEach(t => { const ds = out.filter(e => e.trip === t.id).map(e => e.date).sort(); t.start = ds[0] || ''; t.end = ds[ds.length - 1] || ''; if (!t.members.length) t.members = [myName()]; putTrip(t, true); });
   S.trips.forEach(t => { if (t._dirty) { delete t._dirty; putTrip(t, false); } });
-  if (PV.kind === 'bank' && !PV.target && S.lastPerson !== PV.person) { S.lastPerson = PV.person; metaChanged = true; }
+  if (PV.kind === 'bank' && !PV.target && !PV.linkTo && S.lastPerson !== PV.person) { S.lastPerson = PV.person; metaChanged = true; }
   if (metaChanged) saveMeta();
   putMany(out);
-  if (PV.kind === 'bank' && PV.bal && !PV.target) { const b = PV.bal; S.stmts = (S.stmts || []).filter(x => !(x.from === b.from && x.to === b.to)); S.stmts.push({ from: b.from, to: b.to, n: b.n, ...(b.opening !== undefined ? { opening: b.opening, closing: b.closing } : {}) }); S.stmts.sort((a, c) => a.from.localeCompare(c.from)); metaChanged = true; }
+  if (PV.kind === 'bank' && PV.bal && !PV.target && !PV.linkTo) { const b = PV.bal; S.stmts = (S.stmts || []).filter(x => !(x.from === b.from && x.to === b.to)); S.stmts.push({ from: b.from, to: b.to, n: b.n, ...(b.opening !== undefined ? { opening: b.opening, closing: b.closing } : {}) }); S.stmts.sort((a, c) => a.from.localeCompare(c.from)); metaChanged = true; }
   if (metaChanged) saveMeta();
-  const target = PV.target, skipped = PV.rows.length - sel.length; PV = null; closeSheet();
+  const target = PV.target || PV.linkTo, skipped = PV.rows.length - sel.length; PV = null; closeSheet();
   toast(`Imported ${out.length}${skipped ? `, skipped ${skipped}` : ''}`, 4000);
   if (target) { curTrip = target; go('trips'); } else if (out.some(e => !e.trip)) { month = mk(out.filter(e => !e.trip).map(e => e.date).sort().pop()); go('list'); } else go('trips');
 }
