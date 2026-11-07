@@ -101,7 +101,7 @@ function css(v) { return getComputedStyle(document.documentElement).getPropertyV
 let tt; function toast(m, ms = 2600) { const t = $('#toast'); t.textContent = m; t.classList.add('show'); clearTimeout(tt); tt = setTimeout(() => t.classList.remove('show'), ms); }
 
 // ================= state =================
-const blankMeta = () => ({ stmts: [], dismissed: [], tax: {}, houseAdded: true, categories: DEFAULT_CATS.map(([name, icon, color]) => ({ name, icon, color, budget: 0 })), incCats: DEFAULT_INC.map(([name, icon, color, counts]) => ({ name, icon, color, ...(counts ? { counts } : {}) })), people: ['Me'], rules: [], lastPerson: 'Me', name: '' });
+const blankMeta = () => ({ stmts: [], dismissed: [], tax: {}, houseAdded: true, notes: '', categories: DEFAULT_CATS.map(([name, icon, color]) => ({ name, icon, color, budget: 0 })), incCats: DEFAULT_INC.map(([name, icon, color, counts]) => ({ name, icon, color, ...(counts ? { counts } : {}) })), people: ['Me'], rules: [], lastPerson: 'Me', name: '' });
 let S = { ...blankMeta(), expenses: [], trips: [] };
 let TE = {};                       // tripId -> [expenses]
 let user = null, fb = null, cloud = false, authKnown = false, pending = 0;
@@ -120,6 +120,7 @@ function normalize(b) {
   if (Array.isArray(b.people) && b.people.length) out.people = b.people.map(String);
   if (b.lastPerson) out.lastPerson = String(b.lastPerson);
   if (b.name) out.name = String(b.name);
+  out.notes = typeof b.notes === 'string' ? b.notes : '';
   if (!out.categories.some(c => INVEST_RE.test(c.name))) { const i = out.categories.findIndex(c => c.name === 'Other'); out.categories.splice(i < 0 ? out.categories.length : i, 0, { name: 'Investments', icon: '📈', color: '#00897b', budget: 0 }); }
   if (!out.categories.some(c => c.name === OWE_OUT)) { const i = out.categories.findIndex(c => c.name === 'Other'); out.categories.splice(i < 0 ? out.categories.length : i, 0, { name: OWE_OUT, icon: '🤝', color: '#8d6e63', budget: 0 }); }
   if (!out.incCats.some(c => c.name === OWE_IN)) out.incCats.push({ name: OWE_IN, icon: '🔁', color: '#8d6e63' });
@@ -144,7 +145,7 @@ function normalize(b) {
   return out;
 }
 function loadLocal() { try { const raw = localStorage.getItem(LKEY); return raw ? normalize(JSON.parse(raw)) : null; } catch (e) { return null; } }
-const metaOf = o => ({ categories: o.categories, incCats: o.incCats, people: o.people, rules: o.rules, lastPerson: o.lastPerson, stmts: o.stmts || [], dismissed: o.dismissed || [], tax: o.tax || {}, houseAdded: true, name: o.name || '' });
+const metaOf = o => ({ categories: o.categories, incCats: o.incCats, people: o.people, rules: o.rules, lastPerson: o.lastPerson, stmts: o.stmts || [], dismissed: o.dismissed || [], tax: o.tax || {}, houseAdded: true, name: o.name || '', notes: o.notes || '' });
 function saveLocal() { if (cloud) return; try { localStorage.setItem(LKEY, JSON.stringify({ v: 3, ...metaOf(S), expenses: S.expenses, trips: S.trips, tripExp: TE })); } catch (e) { toast('Could not save — storage may be full'); } }
 function useLocal() { const L = loadLocal() || normalize(null); TE = L.tripExp; delete L.tripExp; S = L; }
 
@@ -210,9 +211,11 @@ function putTrip(t, isNew) {
   } else saveLocal();
   schedule();
 }
-function saveTripNotes(t, text) {
-  t.notes = text; const x = S.trips.find(y => y.id === t.id); if (x) x.notes = text;
-  if (cloud) track(fb.F.updateDoc(fb.F.doc(fb.db, 'trips', t.id), { notes: text })); else saveLocal();
+// ---------- Quick notes: '' = everyday notes, otherwise a trip id ----------
+const notesOf = k => (k ? (trip(k) || {}).notes : S.notes) || '';
+function saveNotes(k, text) {
+  if (k) { const t = trip(k); if (!t) return; t.notes = text; if (cloud) track(fb.F.updateDoc(fb.F.doc(fb.db, 'trips', k), { notes: text })); else saveLocal(); }
+  else { S.notes = text; if (cloud) track(fb.F.setDoc(fb.F.doc(fb.db, 'users', user.uid), { notes: text }, { merge: true })); else saveLocal(); }
 }
 // Parse one scribbled line: "Tea 40", "Cab 350 Ravi", "✓ Dinner 1,200"
 function parseNote(line, t) {
@@ -221,21 +224,27 @@ function parseNote(line, t) {
   const nums = [...body.matchAll(/(?:₹|rs\.?\s*)?(\d[\d,]*(?:\.\d+)?)\s*(?:rs\.?|₹|\/-)?/gi)];
   const m = nums.pop(), amount = m ? r2(parseFloat(m[1].replace(/,/g, ''))) : 0;
   let note = m ? body.slice(0, m.index) + ' ' + body.slice(m.index + m[0].length) : body;
-  const me = meIn(t); let payer = '';
-  for (const n of [...t.members].sort((a, b) => b.length - a.length)) {
-    if (n === me) continue;
-    const re = new RegExp('(^|[^\\p{L}])' + n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(?=$|[^\\p{L}])', 'iu');
-    if (re.test(note)) { payer = n; note = note.replace(re, '$1'); break; }
-  }
+  let payer = '';
+  if (t) { const me = meIn(t);
+    for (const n of [...t.members].sort((a, b) => b.length - a.length)) {
+      if (n === me) continue;
+      const re = new RegExp('(^|[^\\p{L}])' + n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(?=$|[^\\p{L}])', 'iu');
+      if (re.test(note)) { payer = n; note = note.replace(re, '$1'); break; }
+    } }
   note = note.replace(/\b(paid|by)\b\s*$/i, '').replace(/\s+/g, ' ').replace(/^[\s\-:,·–]+|[\s\-:,·–]+$/g, '');
   return { done, amount, payer, note, raw };
 }
-function noteLinesHTML(t) {
-  const lines = (t.notes || '').split('\n'), P = lines.map(l => parseNote(l, t));
-  const open = P.filter(p => p && !p.done && p.amount > 0), left = sum(open);
-  const rows = P.map((p, i) => !p ? '' : `<div class="nline ${p.done ? 'done' : ''}"><span>${esc(p.note || '—')}${p.payer ? ` <span class="muted">· ${esc(p.payer)} paid</span>` : ''}</span>${p.amount ? `<b>${money(p.amount)}</b>` : ''}${p.done ? '<span class="muted">added ✓</span>' : p.amount ? `<button class="small" data-act="nadd" data-i="${i}">➕ Add</button>` : '<span class="muted">no amount</span>'}</div>`).join('');
-  return rows ? `<div class="row" style="margin:10px 0 4px"><span class="label" style="margin:0">To add later</span><b style="text-align:right">${open.length ? open.length + ' · ' + money(left) : 'all added 🎉'}</b></div>${rows}` : '';
+const parseAll = k => { const t = k ? trip(k) : null; return notesOf(k).split('\n').map(l => parseNote(l, t)); };
+const openNotes = k => parseAll(k).filter(p => p && !p.done && p.amount > 0);
+function noteLinesHTML(k) {
+  const P = parseAll(k), open = P.filter(p => p && !p.done && p.amount > 0), done = P.some(p => p && p.done);
+  const rows = P.map((p, i) => !p ? '' : `<div class="nline ${p.done ? 'done' : ''}"><span>${esc(p.note || '—')}${p.payer ? ` <span class="muted">· ${esc(p.payer)} paid</span>` : ''}</span>${p.amount ? `<b>${money(p.amount)}</b>` : ''}${p.done ? '<span class="muted">added ✓</span>' : p.amount ? `<button class="small" data-act="nadd" data-k="${k}" data-i="${i}">➕ Add</button>` : '<span class="muted">no amount</span>'}</div>`).join('');
+  return rows ? `<div class="row" style="margin:10px 0 4px"><span class="label" style="margin:0">To add later</span><b style="text-align:right">${open.length ? open.length + ' · ' + money(sum(open)) : 'all added 🎉'}</b></div>${rows}${done ? `<button class="link" data-act="nclear" data-k="${k}" style="margin-top:8px">🧹 Clear added lines</button>` : ''}` : '';
 }
+const notesBoxHTML = (k, id, linesId) => { const t = k ? trip(k) : null, fr = t ? t.members.find(n => n !== meIn(t)) : '';
+  return `<textarea id="${id}" class="notesTA" data-k="${k}" data-lines="${linesId}" rows="7" placeholder="Jot quickly, one per line:&#10;Tea 40&#10;${fr ? 'Cab 350 ' + esc(fr) : 'Auto 120'}&#10;Dinner 1200">${esc(notesOf(k))}</textarea>
+  <div class="muted" style="margin-top:4px">Saves as you type.${t ? " Put a friend's name on the line if they paid." : ''} Tap ➕ Add later to fill in the details.</div>
+  <div id="${linesId}">${noteLinesHTML(k)}</div>`; };
 async function removeTrip(t) {
   if (cloud) {
     const F = fb.F, ref = F.doc(fb.db, 'trips', t.id);
@@ -356,6 +365,7 @@ $$('.monthbar button').forEach(b => b.onclick = () => { month = shiftMonth(month
 $$('.pseg button').forEach(b => b.onclick = () => { pmode = b.dataset.p; render(); });
 
 function render() {
+  try { fabBadge(); } catch (e) {}
   $('#sync').textContent = !configured ? 'On this phone' : authKnown && !fb ? 'Offline · this phone only' : !authKnown ? 'Connecting…' : !user ? 'Not signed in · this phone only' : !navigator.onLine ? 'Offline · will sync' : pending ? 'Saving…' : '✓ Synced';
   $$('.mlabel').forEach(e => e.textContent = pmode === 'year' ? month.slice(0, 4) : monthLabel(month));
   $$('.pseg button').forEach(b => b.classList.toggle('on', b.dataset.p === pmode));
@@ -709,7 +719,7 @@ function settle(t) {
 }
 function renderTrips() {
   const t = curTrip && trip(curTrip); // a just-joined trip may arrive a moment later, so keep curTrip
-  if (t && tripTab === 'notes' && document.activeElement && document.activeElement.id === 'tripNotes') { $('#noteLines').innerHTML = noteLinesHTML(t); return; } // don't steal focus while typing
+  if (t && tripTab === 'notes' && document.activeElement && document.activeElement.id === 'tripNotes') { $('#noteLines').innerHTML = noteLinesHTML(t.id); return; } // don't steal focus while typing
   $('#tripsBox').innerHTML = t ? tripDetailHTML(t) : tripListHTML();
 }
 function tripListHTML() {
@@ -724,15 +734,13 @@ function tripDetailHTML(t) {
   const all = tripExp(t.id), st = settle(t), ex = st.costs, p = t.budget ? st.tot / t.budget : 0;
   const byCat = {}; ex.forEach(e => byCat[e.cat] = (byCat[e.cat] || 0) + e.amount);
   const cats = Object.keys(byCat).sort((a, b) => byCat[b] - byCat[a]);
-  const nOpen = (t.notes || '').split('\n').map(l => parseNote(l, t)).filter(p => p && !p.done && p.amount > 0).length;
+  const nOpen = openNotes(t.id).length;
   const tabs = `<div class="seg" id="tripSeg"><button data-act="tab" data-tab="exp" class="${tripTab !== 'notes' ? 'on' : ''}">Expenses</button><button data-act="tab" data-tab="notes" class="${tripTab === 'notes' ? 'on' : ''}">📝 Notes${nOpen ? ` (${nOpen})` : ''}</button></div>`;
   const head = `<button class="link" data-act="back">‹ All trips</button>
   <div class="card"><div class="row" style="align-items:flex-start"><div><h2>✈ ${esc(t.name)}</h2><div class="muted">${t.start ? niceDate(t.start) + ' – ' + niceDate(t.end) + ' · ' : ''}${esc(t.members.join(', '))}</div></div><button class="small" data-act="edit" style="flex:0 0 auto">Edit</button></div>
     <div class="big" style="margin-top:10px">${money(st.tot)}</div><div class="muted">${ex.length} expenses${st.mem.length > 1 ? ' · ' + money(st.share) + ' per person' : ''}</div>
     ${t.budget ? `<div class="bar"><i style="width:${Math.min(100, p * 100)}%;background:${barColor(p)}"></i></div><div class="muted" style="margin-top:4px">${Math.round(p * 100)}% of ${money(t.budget)} budget</div>` : ''}</div>${tabs}`;
-  if (tripTab === 'notes') return head + `<div class="card"><textarea id="tripNotes" rows="8" placeholder="Jot quickly, one per line:&#10;Tea 40&#10;Cab 350 ${esc(t.members.find(n => n !== meIn(t)) || 'Ravi')}&#10;Dinner 1200">${esc(t.notes || '')}</textarea>
-    <div class="muted" style="margin-top:4px">Saves as you type. Put a friend's name on the line if they paid. Tap ➕ Add later to fill in the details.</div>
-    <div id="noteLines">${noteLinesHTML(t)}</div></div>`;
+  if (tripTab === 'notes') return head + `<div class="card">${notesBoxHTML(t.id, 'tripNotes', 'noteLines')}</div>`;
   return head + `
   <div class="card hero"><button class="primary" data-act="upload" style="margin-top:0">📄 Upload statement / CSV</button>
     <div class="btns" style="margin:8px 0 0"><button data-act="add">✎ Add manually</button><button data-act="csv">⬇ Download CSV</button></div>
@@ -757,34 +765,56 @@ $('#tripsBox').onclick = ev => {
     case 'csv': return exportCSV(tripExp(t.id).map(e => ({ ...e, trip: t.id })), 'trickle-' + t.name.toLowerCase().replace(/[^a-z0-9]+/g, '-'));
     case 'invite': return invite(t);
     case 'tab': tripTab = a.dataset.tab; return renderTrips();
-    case 'nadd': return addFromNote(t, +a.dataset.i);
   }
 };
-let noteTimer = 0;
-document.addEventListener('visibilitychange', () => { if (document.hidden && noteTimer) { clearTimeout(noteTimer); noteTimer = 0; const el = $('#tripNotes'), t = curTrip && trip(curTrip); if (el && t) saveTripNotes(t, el.value); } });
-$('#tripsBox').addEventListener('input', ev => {
-  if (ev.target.id !== 'tripNotes') return; const t = curTrip && trip(curTrip); if (!t) return;
-  const v = ev.target.value; t.notes = v; $('#noteLines').innerHTML = noteLinesHTML(t);
-  clearTimeout(noteTimer); noteTimer = setTimeout(() => saveTripNotes(t, v), 700);
+let noteTimer = 0, notePending = null;
+function flushNotes() { if (notePending) { clearTimeout(noteTimer); const [k, v] = notePending; notePending = null; noteTimer = 0; saveNotes(k, v); } }
+document.addEventListener('visibilitychange', () => { if (document.hidden) flushNotes(); });
+document.addEventListener('input', ev => {
+  const ta = ev.target; if (!ta.classList || !ta.classList.contains('notesTA')) return;
+  const k = ta.dataset.k, v = ta.value; if (k) { const t = trip(k); if (t) t.notes = v; } else S.notes = v;
+  const box = document.getElementById(ta.dataset.lines); if (box) box.innerHTML = noteLinesHTML(k);
+  notePending = [k, v]; clearTimeout(noteTimer); noteTimer = setTimeout(flushNotes, 700);
 });
 // Save when leaving the box — a moment later, so a tap on ➕ Add isn't lost to a re-render
-$('#tripsBox').addEventListener('focusout', ev => { if (ev.target.id === 'tripNotes' && noteTimer) { clearTimeout(noteTimer); const v = ev.target.value; noteTimer = setTimeout(() => { noteTimer = 0; const t = trip(curTrip); if (t) saveTripNotes(t, v); schedule(); }, 400); } });
-function addFromNote(t, i) {
-  if (noteTimer) { clearTimeout(noteTimer); noteTimer = 0; saveTripNotes(t, t.notes); }
-  const line = (t.notes || '').split('\n')[i], p = line && parseNote(line, t); if (!p || !p.amount) return;
-  resetForm(); go('add'); $('#fFor').value = t.id;
+document.addEventListener('focusout', ev => { if (ev.target.classList && ev.target.classList.contains('notesTA') && notePending) { clearTimeout(noteTimer); noteTimer = setTimeout(() => { flushNotes(); schedule(); }, 400); } });
+document.addEventListener('click', ev => {
+  const a = ev.target.closest('[data-act=nadd],[data-act=nclear]'); if (!a) return;
+  const k = a.dataset.k || '', fromSheet = !!a.closest('#sheet');
+  if (a.dataset.act === 'nadd') { if (fromSheet) closeSheet(); return addFromNote(k, +a.dataset.i, fromSheet); }
+  flushNotes(); saveNotes(k, notesOf(k).split('\n').filter(l => !/^\s*✓/.test(l)).join('\n'));
+  if (fromSheet) openQuickNotes(k); else renderTrips();
+});
+function addFromNote(k, i, fromSheet) {
+  flushNotes();
+  const t = k ? trip(k) : null, line = notesOf(k).split('\n')[i], p = line && parseNote(line, t); if (!p || !p.amount) return;
+  resetForm(); go('add'); $('#fFor').value = k;
   selType = 'out'; const c = ruleFor(p.note, 'out'); if (c) selCat = c;
-  const td = today(); $('#date').value = t.start && (td < t.start || (t.end && td > t.end)) ? t.start : td;
-  $('#amt').value = p.amount; $('#note').value = p.note; renderAdd(); fillPerson(p.payer || meIn(t));
-  noteLink = { trip: t.id, i, raw: line }; openForm(true);
+  const td = today(); $('#date').value = t && t.start && (td < t.start || (t.end && td > t.end)) ? t.start : td;
+  $('#amt').value = p.amount; $('#note').value = p.note; renderAdd(); fillPerson(t ? (p.payer || meIn(t)) : undefined);
+  noteLink = { k, i, raw: line, fromSheet }; openForm(true);
   toast('From your note — add details and save');
 }
 function tickNote() {
-  const L = noteLink; noteLink = null; const t = L && trip(L.trip); if (!t) return;
-  const lines = (t.notes || '').split('\n'); let i = lines[L.i] === L.raw ? L.i : lines.indexOf(L.raw); if (i < 0) return;
-  lines[i] = '✓ ' + lines[i].trim(); saveTripNotes(t, lines.join('\n'));
-  curTrip = t.id; tripTab = 'notes'; go('trips');
+  const L = noteLink; noteLink = null; if (!L || (L.k && !trip(L.k))) return;
+  const lines = notesOf(L.k).split('\n'); const i = lines[L.i] === L.raw ? L.i : lines.indexOf(L.raw); if (i < 0) return;
+  lines[i] = '✓ ' + lines[i].trim(); saveNotes(L.k, lines.join('\n'));
+  if (L.fromSheet) { renderAdd(); openQuickNotes(L.k); } else { curTrip = L.k; tripTab = 'notes'; go('trips'); }
 }
+// Floating 📝 button on every tab → quick notes for everyday or any trip
+function defaultNotesKey() {
+  if (view === 'trips' && curTrip && trip(curTrip)) return curTrip;
+  const td = today(), on = S.trips.find(t => t.start && t.start <= td && (!t.end || td <= t.end)); return on ? on.id : '';
+}
+function openQuickNotes(k = defaultNotesKey()) {
+  const opts = [['', '🗒 Everyday'], ...tripsSorted().map(t => [t.id, '✈ ' + t.name])];
+  openSheet(`<div class="row"><h3 style="margin:0">📝 Quick notes</h3><button class="small" data-x="close" style="flex:0 0 auto">Done</button></div>
+    <label style="margin-top:10px">Notes for<select id="qnFor">${opts.map(([v, n]) => `<option value="${v}" ${v === k ? 'selected' : ''}>${esc(n)}${openNotes(v).length ? ` (${openNotes(v).length})` : ''}</option>`).join('')}</select></label>
+    <div id="qnBody">${notesBoxHTML(k, 'qnText', 'qnLines')}</div>`, e => { if (e.target.closest('[data-x=close]')) { flushNotes(); closeSheet(); schedule(); } });
+  $('#qnFor').onchange = () => { flushNotes(); $('#qnBody').innerHTML = notesBoxHTML($('#qnFor').value, 'qnText', 'qnLines'); };
+}
+$('#notesFab').onclick = () => openQuickNotes();
+function fabBadge() { const n = openNotes('').length + S.trips.reduce((a, t) => a + openNotes(t.id).length, 0); $('#notesFab').dataset.n = n || ''; }
 async function invite(t) {
   const url = location.origin + location.pathname + '?join=' + t.id;
   const text = `Join our trip “${t.name}” on Trickle to add and see trip expenses together:`;
@@ -1476,3 +1506,6 @@ if ('serviceWorker' in navigator) {
   navigator.serviceWorker.addEventListener('controllerchange', () => { if (hadController && !reloaded) { reloaded = true; location.reload(); } });
   window.addEventListener('load', () => navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then(r => r.update()).catch(() => {}));
 }
+// Hide the floating notes button while the keyboard is up
+document.addEventListener('focusin', e => { if (e.target.matches('input:not([type=checkbox]):not([type=radio]):not([type=file]),textarea') && !e.target.closest('#sheet')) document.body.classList.add('typing'); });
+document.addEventListener('focusout', () => setTimeout(() => { const a = document.activeElement; if (!a || !a.matches('input,textarea')) document.body.classList.remove('typing'); }, 50));
