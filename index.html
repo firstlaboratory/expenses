@@ -96,6 +96,10 @@ canvas{width:100%;display:block}
 .pvf button{font-size:13px;padding:7px 4px}.pvf span{opacity:.7}
 .trip{cursor:pointer}
 .trip .row{align-items:center}
+#tripNotes{width:100%;box-sizing:border-box;font:inherit;font-size:16px;line-height:1.5;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--text);resize:vertical}
+.nline{display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--line);font-size:14px}
+.nline>span:first-child{flex:1;min-width:0;overflow-wrap:anywhere}.nline>b{white-space:nowrap}.nline button{flex:0 0 auto;margin:0}
+.nline.done{opacity:.5}.nline.done>span:first-child{text-decoration:line-through}
 .settle{display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--line);font-size:14px}
 .settle:last-child{border-bottom:0}
 .inc{color:var(--good)}
@@ -257,6 +261,6 @@ body.selecting main{padding-bottom:180px}
 <input type="file" id="impFile" hidden accept=".csv,.txt,.xls,.xlsx,.json,text/csv,text/plain,application/json,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet">
 <div class="sheet-bg" id="sheetBg"><div class="sheet" id="sheet"></div></div>
 <div class="toast" id="toast"></div>
-<script type="module" src="app.js?v=24"></script>
+<script type="module" src="app.js?v=25"></script>
 </body>
 </html>

@@ -106,7 +106,7 @@ let S = { ...blankMeta(), expenses: [], trips: [] };
 let TE = {};                       // tripId -> [expenses]
 let user = null, fb = null, cloud = false, authKnown = false, pending = 0;
 let unsubs = [], tripUnsubs = {}, migrated = false;
-let month = mk(today()), view = 'add', curTrip = null;
+let month = mk(today()), view = 'add', curTrip = null, tripTab = 'exp', noteLink = null;
 let selCat = 'Food', selInc = 'Salary', selType = 'out', selMode = 'UPI', edit = null; // edit = {id, trip}
 
 // Accepts any saved shape (v1 with category ids, v3, cloud docs) and returns names-based data.
@@ -137,7 +137,7 @@ function normalize(b) {
   (b.trips || []).forEach(t => {
     if (!t) return;
     const id = String(t.id || uid());
-    out.trips.push({ id, name: String(t.name || 'Trip'), start: t.start || '', end: t.end || '', budget: +t.budget || 0, members: Array.isArray(t.members) && t.members.length ? t.members.map(String) : ['Me'] });
+    out.trips.push({ id, name: String(t.name || 'Trip'), start: t.start || '', end: t.end || '', budget: +t.budget || 0, notes: String(t.notes || ''), members: Array.isArray(t.members) && t.members.length ? t.members.map(String) : ['Me'] });
     const list = (b.tripExp && b.tripExp[t.id]) || t.expenses || [];
     out.tripExp[id] = list.filter(ok).map(e => ({ ...fixE(e), trip: id }));
   });
@@ -209,6 +209,32 @@ function putTrip(t, isNew) {
     else track(fb.F.updateDoc(ref, d));
   } else saveLocal();
   schedule();
+}
+function saveTripNotes(t, text) {
+  t.notes = text; const x = S.trips.find(y => y.id === t.id); if (x) x.notes = text;
+  if (cloud) track(fb.F.updateDoc(fb.F.doc(fb.db, 'trips', t.id), { notes: text })); else saveLocal();
+}
+// Parse one scribbled line: "Tea 40", "Cab 350 Ravi", "✓ Dinner 1,200"
+function parseNote(line, t) {
+  const raw = line.trim(); if (!raw) return null;
+  const done = /^✓/.test(raw), body = raw.replace(/^✓\s*/, '');
+  const nums = [...body.matchAll(/(?:₹|rs\.?\s*)?(\d[\d,]*(?:\.\d+)?)\s*(?:rs\.?|₹|\/-)?/gi)];
+  const m = nums.pop(), amount = m ? r2(parseFloat(m[1].replace(/,/g, ''))) : 0;
+  let note = m ? body.slice(0, m.index) + ' ' + body.slice(m.index + m[0].length) : body;
+  const me = meIn(t); let payer = '';
+  for (const n of [...t.members].sort((a, b) => b.length - a.length)) {
+    if (n === me) continue;
+    const re = new RegExp('(^|[^\\p{L}])' + n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(?=$|[^\\p{L}])', 'iu');
+    if (re.test(note)) { payer = n; note = note.replace(re, '$1'); break; }
+  }
+  note = note.replace(/\b(paid|by)\b\s*$/i, '').replace(/\s+/g, ' ').replace(/^[\s\-:,·–]+|[\s\-:,·–]+$/g, '');
+  return { done, amount, payer, note, raw };
+}
+function noteLinesHTML(t) {
+  const lines = (t.notes || '').split('\n'), P = lines.map(l => parseNote(l, t));
+  const open = P.filter(p => p && !p.done && p.amount > 0), left = sum(open);
+  const rows = P.map((p, i) => !p ? '' : `<div class="nline ${p.done ? 'done' : ''}"><span>${esc(p.note || '—')}${p.payer ? ` <span class="muted">· ${esc(p.payer)} paid</span>` : ''}</span>${p.amount ? `<b>${money(p.amount)}</b>` : ''}${p.done ? '<span class="muted">added ✓</span>' : p.amount ? `<button class="small" data-act="nadd" data-i="${i}">➕ Add</button>` : '<span class="muted">no amount</span>'}</div>`).join('');
+  return rows ? `<div class="row" style="margin:10px 0 4px"><span class="label" style="margin:0">To add later</span><b style="text-align:right">${open.length ? open.length + ' · ' + money(left) : 'all added 🎉'}</b></div>${rows}` : '';
 }
 async function removeTrip(t) {
   if (cloud) {
@@ -324,7 +350,7 @@ async function handleJoin() {
 
 // ================= rendering =================
 let rq = 0; function schedule() { ownCache = null; if (!rq) rq = requestAnimationFrame(() => { rq = 0; render(); }); }
-function go(v) { if (v !== 'list' && multi) { multi = false; picked.clear(); $('#selBtn').textContent = 'Select'; } view = v; $$('section').forEach(s => s.classList.toggle('on', s.id === 'v-' + v)); $$('nav button').forEach(b => b.classList.toggle('on', b.dataset.v === v)); window.scrollTo(0, 0); render(); }
+function go(v) { if (v !== 'add') noteLink = null; if (v !== 'list' && multi) { multi = false; picked.clear(); $('#selBtn').textContent = 'Select'; } view = v; $$('section').forEach(s => s.classList.toggle('on', s.id === 'v-' + v)); $$('nav button').forEach(b => b.classList.toggle('on', b.dataset.v === v)); window.scrollTo(0, 0); render(); }
 $$('nav button').forEach(b => b.onclick = () => { if (b.dataset.v === 'trips' && view === 'trips') curTrip = null; go(b.dataset.v); });
 $$('.monthbar button').forEach(b => b.onclick = () => { month = shiftMonth(month, +b.dataset.m * (pmode === 'year' ? 12 : 1)); render(); });
 $$('.pseg button').forEach(b => b.onclick = () => { pmode = b.dataset.p; render(); });
@@ -507,7 +533,7 @@ $('#catChips').onclick = e => { const b = e.target.closest('[data-c]'); if (b) {
 $('#typeSeg').onclick = e => { const b = e.target.closest('[data-t]'); if (b && !edit) { selType = b.dataset.t; renderAdd(); fillPerson(); } };
 $('#modeChips').onclick = e => { const b = e.target.closest('[data-mode]'); if (b) { selMode = b.dataset.mode; renderAdd(); } };
 function openForm(on = true) { $('#f').classList.toggle('hidden', !on); $('#manualBtn').textContent = on ? '✕ Close form' : '✎ Add manually'; if (on) setTimeout(() => $('#amt').focus(), 50); }
-$('#manualBtn').onclick = () => { const on = $('#f').classList.contains('hidden'); if (!on) resetForm(); openForm(on); };
+$('#manualBtn').onclick = () => { noteLink = null; const on = $('#f').classList.contains('hidden'); if (!on) resetForm(); openForm(on); };
 function startEdit(id, t) {
   const e = findExp(id, t); if (!e) return;
   edit = { id, trip: t || '' }; go('add');
@@ -517,7 +543,7 @@ function startEdit(id, t) {
   $('#saveBtn').textContent = 'Update expense'; $('#editBtns').classList.remove('hidden'); openForm(true);
 }
 function resetForm() { edit = null; selType = 'out'; SPL = { on: false, by: 'shares', me: 1, rows: [] }; const f = $('#fFor').value; $('#f').reset(); $('#fFor').value = f; $('#date').value = today(); $('#saveBtn').textContent = 'Save expense'; $('#editBtns').classList.add('hidden'); }
-$('#cancelEdit').onclick = () => { resetForm(); openForm(false); renderAdd(); };
+$('#cancelEdit').onclick = () => { noteLink = null; resetForm(); openForm(false); renderAdd(); };
 $('#delBtn').onclick = () => { const e = edit && findExp(edit.id, edit.trip); if (!e || !confirm('Delete this expense?')) return; delExp(e); resetForm(); openForm(false); toast('Deleted'); };
 $('#note').addEventListener('change', () => { if (edit) return; const r = ruleFor($('#note').value, selType); if (r) { if (selType === 'in') selInc = r; else selCat = r; renderAdd(); } });
 $('#f').onsubmit = ev => {
@@ -547,6 +573,7 @@ function saveForm(data, forT, inc) {
   if (!forT && S.lastPerson !== data.person) { S.lastPerson = data.person; saveMeta(); }
   if (!forT && !inc) budgetCheck(data.cat, mk(data.date));
   const wasEdit = !!edit; resetForm();
+  if (noteLink && !wasEdit) { openForm(false); tickNote(); if (changed) offerRemember(changed); return; }
   if (changed) offerRemember(changed); else if (wasEdit) openForm(false); else $('#amt').focus();
 }
 function budgetCheck(n, m) { const c = cat(n); if (!c.budget) return; const sp = sum(inMonth(m).filter(e => e.cat === n)); const p = sp / c.budget; if (p >= 1) toast(`⚠️ ${c.name} is over budget: ${money(sp)} of ${money(c.budget)}`, 4000); else if (p >= .8) toast(`${c.name} at ${Math.round(p * 100)}% of budget`, 3500); }
@@ -682,6 +709,7 @@ function settle(t) {
 }
 function renderTrips() {
   const t = curTrip && trip(curTrip); // a just-joined trip may arrive a moment later, so keep curTrip
+  if (t && tripTab === 'notes' && document.activeElement && document.activeElement.id === 'tripNotes') { $('#noteLines').innerHTML = noteLinesHTML(t); return; } // don't steal focus while typing
   $('#tripsBox').innerHTML = t ? tripDetailHTML(t) : tripListHTML();
 }
 function tripListHTML() {
@@ -696,10 +724,16 @@ function tripDetailHTML(t) {
   const all = tripExp(t.id), st = settle(t), ex = st.costs, p = t.budget ? st.tot / t.budget : 0;
   const byCat = {}; ex.forEach(e => byCat[e.cat] = (byCat[e.cat] || 0) + e.amount);
   const cats = Object.keys(byCat).sort((a, b) => byCat[b] - byCat[a]);
-  return `<button class="link" data-act="back">‹ All trips</button>
+  const nOpen = (t.notes || '').split('\n').map(l => parseNote(l, t)).filter(p => p && !p.done && p.amount > 0).length;
+  const tabs = `<div class="seg" id="tripSeg"><button data-act="tab" data-tab="exp" class="${tripTab !== 'notes' ? 'on' : ''}">Expenses</button><button data-act="tab" data-tab="notes" class="${tripTab === 'notes' ? 'on' : ''}">📝 Notes${nOpen ? ` (${nOpen})` : ''}</button></div>`;
+  const head = `<button class="link" data-act="back">‹ All trips</button>
   <div class="card"><div class="row" style="align-items:flex-start"><div><h2>✈ ${esc(t.name)}</h2><div class="muted">${t.start ? niceDate(t.start) + ' – ' + niceDate(t.end) + ' · ' : ''}${esc(t.members.join(', '))}</div></div><button class="small" data-act="edit" style="flex:0 0 auto">Edit</button></div>
     <div class="big" style="margin-top:10px">${money(st.tot)}</div><div class="muted">${ex.length} expenses${st.mem.length > 1 ? ' · ' + money(st.share) + ' per person' : ''}</div>
-    ${t.budget ? `<div class="bar"><i style="width:${Math.min(100, p * 100)}%;background:${barColor(p)}"></i></div><div class="muted" style="margin-top:4px">${Math.round(p * 100)}% of ${money(t.budget)} budget</div>` : ''}</div>
+    ${t.budget ? `<div class="bar"><i style="width:${Math.min(100, p * 100)}%;background:${barColor(p)}"></i></div><div class="muted" style="margin-top:4px">${Math.round(p * 100)}% of ${money(t.budget)} budget</div>` : ''}</div>${tabs}`;
+  if (tripTab === 'notes') return head + `<div class="card"><textarea id="tripNotes" rows="8" placeholder="Jot quickly, one per line:&#10;Tea 40&#10;Cab 350 ${esc(t.members.find(n => n !== meIn(t)) || 'Ravi')}&#10;Dinner 1200">${esc(t.notes || '')}</textarea>
+    <div class="muted" style="margin-top:4px">Saves as you type. Put a friend's name on the line if they paid. Tap ➕ Add later to fill in the details.</div>
+    <div id="noteLines">${noteLinesHTML(t)}</div></div>`;
+  return head + `
   <div class="card hero"><button class="primary" data-act="upload" style="margin-top:0">📄 Upload statement / CSV</button>
     <div class="btns" style="margin:8px 0 0"><button data-act="add">✎ Add manually</button><button data-act="csv">⬇ Download CSV</button></div>
     ${cloud ? '<button data-act="invite" style="width:100%;margin-top:8px">👥 Invite people</button>' : ''}</div>
@@ -722,8 +756,35 @@ $('#tripsBox').onclick = ev => {
     case 'add': resetForm(); go('add'); $('#fFor').value = t.id; fillPerson(); return openForm(true);
     case 'csv': return exportCSV(tripExp(t.id).map(e => ({ ...e, trip: t.id })), 'trickle-' + t.name.toLowerCase().replace(/[^a-z0-9]+/g, '-'));
     case 'invite': return invite(t);
+    case 'tab': tripTab = a.dataset.tab; return renderTrips();
+    case 'nadd': return addFromNote(t, +a.dataset.i);
   }
 };
+let noteTimer = 0;
+document.addEventListener('visibilitychange', () => { if (document.hidden && noteTimer) { clearTimeout(noteTimer); noteTimer = 0; const el = $('#tripNotes'), t = curTrip && trip(curTrip); if (el && t) saveTripNotes(t, el.value); } });
+$('#tripsBox').addEventListener('input', ev => {
+  if (ev.target.id !== 'tripNotes') return; const t = curTrip && trip(curTrip); if (!t) return;
+  const v = ev.target.value; t.notes = v; $('#noteLines').innerHTML = noteLinesHTML(t);
+  clearTimeout(noteTimer); noteTimer = setTimeout(() => saveTripNotes(t, v), 700);
+});
+// Save when leaving the box — a moment later, so a tap on ➕ Add isn't lost to a re-render
+$('#tripsBox').addEventListener('focusout', ev => { if (ev.target.id === 'tripNotes' && noteTimer) { clearTimeout(noteTimer); const v = ev.target.value; noteTimer = setTimeout(() => { noteTimer = 0; const t = trip(curTrip); if (t) saveTripNotes(t, v); schedule(); }, 400); } });
+function addFromNote(t, i) {
+  if (noteTimer) { clearTimeout(noteTimer); noteTimer = 0; saveTripNotes(t, t.notes); }
+  const line = (t.notes || '').split('\n')[i], p = line && parseNote(line, t); if (!p || !p.amount) return;
+  resetForm(); go('add'); $('#fFor').value = t.id;
+  selType = 'out'; const c = ruleFor(p.note, 'out'); if (c) selCat = c;
+  const td = today(); $('#date').value = t.start && (td < t.start || (t.end && td > t.end)) ? t.start : td;
+  $('#amt').value = p.amount; $('#note').value = p.note; renderAdd(); fillPerson(p.payer || meIn(t));
+  noteLink = { trip: t.id, i, raw: line }; openForm(true);
+  toast('From your note — add details and save');
+}
+function tickNote() {
+  const L = noteLink; noteLink = null; const t = L && trip(L.trip); if (!t) return;
+  const lines = (t.notes || '').split('\n'); let i = lines[L.i] === L.raw ? L.i : lines.indexOf(L.raw); if (i < 0) return;
+  lines[i] = '✓ ' + lines[i].trim(); saveTripNotes(t, lines.join('\n'));
+  curTrip = t.id; tripTab = 'notes'; go('trips');
+}
 async function invite(t) {
   const url = location.origin + location.pathname + '?join=' + t.id;
   const text = `Join our trip “${t.name}” on Trickle to add and see trip expenses together:`;
@@ -1220,7 +1281,7 @@ function exportCSV(list, base) {
   deliver(`${base}-${today()}.csv`, '﻿' + rows.map(r => r.map(csvCell).join(',')).join('\r\n'), 'text/csv');
 }
 $('#dlCsv').onclick = () => exportCSV(S.expenses.concat(...Object.entries(TE).map(([id, l]) => l.map(e => ({ ...e, trip: id })))), 'trickle');
-$('#expBackup').onclick = () => deliver(`trickle-backup-${today()}.json`, JSON.stringify({ app: 'trickle', v: 3, ...metaOf(S), expenses: S.expenses, trips: S.trips.map(t => ({ id: t.id, name: t.name, start: t.start, end: t.end, budget: t.budget, members: t.members })), tripExp: TE }), 'application/json');
+$('#expBackup').onclick = () => deliver(`trickle-backup-${today()}.json`, JSON.stringify({ app: 'trickle', v: 3, ...metaOf(S), expenses: S.expenses, trips: S.trips.map(t => ({ id: t.id, name: t.name, start: t.start, end: t.end, budget: t.budget, notes: t.notes || '', members: t.members })), tripExp: TE }), 'application/json');
 
 // ================= import =================
 let fileTarget = '';
