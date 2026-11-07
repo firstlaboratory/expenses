@@ -335,7 +335,7 @@ function splitFromForm() {
   return { ok: true, data: { split: rows.map(r => ({ who: r.who, amount: r.amount, ...(SPL.by === 'shares' ? { shares: r.shares } : {}) })), splitBy: SPL.by, meShares: SPL.me } };
 }
 const ATM_RE = /^(ATW|NWD|EAW)\b|^(ATW|NWD|EAW)-|\bATM\b|CASH WDL|CASH WITHDRAWAL/i;
-const needsReview = e => !e.trip && !e.reviewed && !isFriend(e) && !hasSplit(e) && (isInc(e) ? e.cat === 'Other income' : (e.cat === 'Other' || ATM_RE.test(e.note)));
+const needsReview = e => !e.trip && !e.reviewed && !isFriend(e) && !hasSplit(e) && (isInc(e) ? e.cat === 'Other income' : e.cat === 'Other');   // ATM cash lands in Other, so it shows up here too
 const reviewQueue = () => S.expenses.filter(needsReview).sort((a, b) => b.date.localeCompare(a.date));
 function coverage() {
   const days = new Set(), addRange = (f, t) => { const d = new Date(f + 'T00:00'), end = new Date(t + 'T00:00'); while (d <= end) { days.add(ymd(d)); d.setDate(d.getDate() + 1); } };
