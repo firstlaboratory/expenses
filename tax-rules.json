@@ -1,0 +1,20 @@
+{
+  "updated": "2026-11-07",
+  "note": "Indian income-tax rules used by Trickle's tax estimate. Keys are the starting year of the financial year (2026 = FY 2026-27, April 2026 – March 2027). Slab upper limits in rupees; null means 'and above'.",
+  "sources": [
+    "https://www.taxheal.com/income-tax-slab-for-fy-2026-27.html",
+    "https://cleartax.in/s/income-tax-changes-from-april-2026"
+  ],
+  "years": {
+    "2025": {
+      "new": { "slabs": [[400000, 0], [800000, 0.05], [1200000, 0.10], [1600000, 0.15], [2000000, 0.20], [2400000, 0.25], [null, 0.30]], "sd": 75000, "rebateLimit": 1200000, "rebateMax": 60000 },
+      "old": { "slabs": [[250000, 0], [500000, 0.05], [1000000, 0.20], [null, 0.30]], "sd": 50000, "rebateLimit": 500000, "rebateMax": 12500, "c80": 150000, "homeLoan": 200000, "nps": 50000, "savingsInterest": 10000 },
+      "cess": 0.04, "stcg": 0.20, "ltcg": 0.125, "ltcgExempt": 125000, "advanceTaxAbove": 10000
+    },
+    "2026": {
+      "new": { "slabs": [[400000, 0], [800000, 0.05], [1200000, 0.10], [1600000, 0.15], [2000000, 0.20], [2400000, 0.25], [null, 0.30]], "sd": 75000, "rebateLimit": 1200000, "rebateMax": 60000 },
+      "old": { "slabs": [[250000, 0], [500000, 0.05], [1000000, 0.20], [null, 0.30]], "sd": 50000, "rebateLimit": 500000, "rebateMax": 12500, "c80": 150000, "homeLoan": 200000, "nps": 50000, "savingsInterest": 10000 },
+      "cess": 0.04, "stcg": 0.20, "ltcg": 0.125, "ltcgExempt": 125000, "advanceTaxAbove": 10000
+    }
+  }
+}
