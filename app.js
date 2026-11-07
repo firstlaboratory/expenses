@@ -375,7 +375,7 @@ function openReview() {
     <div class="revcard"><div class="t" style="white-space:normal;font-weight:600">${esc(e.note || '(no description)')}</div><div class="muted">${niceDate(e.date)} · ${e.mode}${atm ? ' · cash withdrawal' : ''}</div><div class="big${inc ? ' inc' : ''}" style="font-size:24px;margin-top:4px">${inc ? '+' : ''}${money(e.amount)}</div></div>
     ${atm ? '<p class="muted" style="margin:0 0 8px">Gave the cash to family? Pick 🏡 House budget. Gave it to a friend? Tap 🤝.</p>' : ''}
     <div class="chips">${sorted.map(c => `<button class="chip" data-r="cat" data-c="${esc(c.name)}">${c.icon} ${esc(c.name)}</button>`).join('')}</div>
-    ${!atm && key.length > 2 ? `<label class="pvrow" style="border:0;padding:10px 0 0"><input type="checkbox" id="revRem" checked><span class="muted">Remember for “${esc(e.note)}”</span></label>` : ''}
+    ${!atm && key.length > 2 ? `<label class="pvrow" style="border:0;padding:10px 0 0"><input type="checkbox" id="revRem" checked><span class="muted">Apply to all “${esc(e.note)}” entries — now and in future statements</span></label>` : ''}
     <div class="btns" style="margin:12px 0 0"><button data-r="friend">🤝 ${inc ? 'Friend paid back' : 'For a friend'}</button>${inc ? '' : '<button data-r="split">➗ Split</button>'}</div>
     <div class="btns" style="margin:8px 0 0"><button data-r="keep">✓ Keep as ${inc ? 'Other income' : 'Other'}</button><button data-r="skip">Skip ›</button></div>`, ev => {
     const b = ev.target.closest('[data-r]'); if (!b) return;
@@ -390,7 +390,7 @@ function openReview() {
       const same = rem ? reviewQueue().filter(x => x.id !== e.id && keyOf(x.note) === key && isInc(x) === inc) : [];
       putMany([e, ...same].map(x => ({ ...x, cat: c, reviewed: true })));
       if (rem) { setRule(e.note, c); saveMeta(); }
-      toast(`${c}${same.length ? ` · ${same.length + 1} entries` : ''}${rem ? ' · remembered' : ''}`);
+      toast(`${c}${same.length ? ` · ${same.length + 1} entries` : ''}${rem ? ' · applied to all' : ''}`);
       return openReview();
     }
   });
