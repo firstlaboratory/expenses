@@ -117,7 +117,8 @@ canvas{width:100%;display:block}
 .tick+.ic::after{display:none}
 .item{user-select:none;-webkit-user-select:none}
 .selbar{position:fixed;left:0;right:0;bottom:calc(56px + env(safe-area-inset-bottom));z-index:12;background:var(--card);border-top:1px solid var(--line);box-shadow:0 -4px 14px #0002;padding:10px 16px}
-.selbtns{display:flex;gap:6px;margin-top:8px}.selbtns button{flex:1;padding:9px 6px;font-size:14px}
+.selbtns{display:flex;gap:5px;margin-top:8px}.selbtns button{flex:1 1 auto;padding:9px 4px;font-size:13px;white-space:nowrap}.selbtns [data-bulk=all],.selbtns [data-bulk=del]{flex:0 0 auto;padding:9px 10px}
+.frow{cursor:pointer}
 body.selecting main{padding-bottom:180px}
 .banner{background:var(--accent-soft);color:var(--text);border-radius:12px;padding:12px 14px;margin-bottom:12px;font-size:14px}
 .gbtn{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;margin-top:10px;font-weight:600}
@@ -144,6 +145,7 @@ body.selecting main{padding-bottom:180px}
       <label>Date<input type="date" id="date" required></label>
       <label><span id="personLbl">Paid by</span><select id="person"></select></label>
     </div>
+    <label id="whoWrap" class="hidden"><span id="whoLbl">Which friend is this for?</span><input id="who" list="whoList" placeholder="Friend's name" maxlength="30"></label><datalist id="whoList"></datalist>
     <label>Note<input id="note" placeholder="What was it for?" maxlength="120"></label>
     <button class="primary" id="saveBtn">Save expense</button>
     <div class="btns hidden" id="editBtns" style="margin-top:8px"><button type="button" id="cancelEdit">Cancel</button><button type="button" class="danger" id="delBtn">Delete</button></div>
@@ -172,6 +174,7 @@ body.selecting main{padding-bottom:180px}
   <div class="card fact-card" id="factStats"></div>
   <div class="card"><div class="label" style="margin-top:0">Spending by category</div><canvas id="donut" style="height:210px;cursor:pointer"></canvas><div class="legend" id="legend"></div><div id="outDetail"></div></div>
   <div class="card"><div class="label" style="margin-top:0">Income by source</div><canvas id="incDonut" style="height:210px;cursor:pointer"></canvas><div class="legend" id="incLegend"></div><div id="inDetail"></div></div>
+  <div class="card"><div class="label" style="margin-top:0">🤝 Paid for friends</div><div id="friendsBox"></div></div>
   <div class="card"><div class="label" style="margin-top:0">📈 Investments</div><div id="invSummary"></div>
     <div id="invBody"><canvas id="invDonut" style="height:190px;cursor:pointer;margin-top:10px"></canvas><div class="legend" id="invLegend"></div><div id="invDetail"></div>
     <div class="label" id="invBarsTitle">Invested — last 6 months</div><canvas id="invBars" style="height:140px"></canvas></div></div>
@@ -224,10 +227,10 @@ body.selecting main{padding-bottom:180px}
   <button data-v="stats"><b>▥</b>Stats</button>
   <button data-v="settings"><b>⚙</b>Settings</button>
 </nav>
-<div id="selBar" class="selbar hidden"><div id="selCount"></div><div class="selbtns"><button data-bulk="all">All</button><button data-bulk="note">✎ Note</button><button data-bulk="cat">🏷 Category</button><button data-bulk="del" class="danger">🗑</button></div></div>
+<div id="selBar" class="selbar hidden"><div id="selCount"></div><div class="selbtns"><button data-bulk="all">All</button><button data-bulk="note">✎ Note</button><button data-bulk="cat">🏷 Category</button><button data-bulk="friend">🤝 Friend</button><button data-bulk="del" class="danger">🗑</button></div></div>
 <input type="file" id="impFile" hidden accept=".csv,.txt,.xls,.xlsx,.json,text/csv,text/plain,application/json,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet">
 <div class="sheet-bg" id="sheetBg"><div class="sheet" id="sheet"></div></div>
 <div class="toast" id="toast"></div>
-<script type="module" src="app.js?v=15"></script>
+<script type="module" src="app.js?v=16"></script>
 </body>
 </html>
