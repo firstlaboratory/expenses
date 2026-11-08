@@ -1034,7 +1034,7 @@ function taxData(fy, rf, rt) {
 const slips = () => ((S.tax || {}).slips || {});
 const addMonth = (m, n) => { let [y, mo] = m.split('-').map(Number); mo += n; while (mo > 12) { mo -= 12; y++; } while (mo < 1) { mo += 12; y--; } return `${y}-${String(mo).padStart(2, '0')}`; };
 const monthsIn = (from, to) => { const out = []; for (let m = from.slice(0, 7); m <= to.slice(0, 7); m = addMonth(m, 1)) out.push(m); return out; };
-const SLIPK = ['gross', 'tds', 'pf', 'pt'];
+const SLIPK = ['gross', 'tds', 'pf', 'pt', 'meal'];
 const monthName = m => { const [y, mo] = m.split('-').map(Number); return new Date(y, mo - 1, 1).toLocaleDateString('en-IN', { month: 'short', year: 'numeric' }); };
 // Figures for one month: the payslip itself, else spread from a later payslip's year-to-date, else scaled from take-home, else projected from the latest payslip
 function monthFig(m, salByMonth) {
@@ -1050,11 +1050,11 @@ function monthFig(m, salByMonth) {
   const credit = salByMonth[m];
   if (credit && N.net) { const r = credit / N.net, o = { src: 'scaled' }; SLIPK.forEach(f => o[f] = (+N[f] || 0) * r); return o; }
   if (m >= mk(today())) { const o = { src: 'proj' }; SLIPK.forEach(f => o[f] = +N[f] || 0); return o; }
-  return { src: 'none', gross: 0, tds: 0, pf: 0, pt: 0 };
+  return { src: 'none', gross: 0, tds: 0, pf: 0, pt: 0, meal: 0 };
 }
 function slipTotals(from, to, salByMonth) {
   if (!Object.keys(slips()).length) return null;
-  const t = { gross: 0, tds: 0, pf: 0, pt: 0, n: { slip: 0, ytd: 0, scaled: 0, proj: 0, none: 0 } };
+  const t = { gross: 0, tds: 0, pf: 0, pt: 0, meal: 0, n: { slip: 0, ytd: 0, scaled: 0, proj: 0, none: 0 } };
   monthsIn(from, to).forEach(m => { const f = monthFig(m, salByMonth); if (!f) return; SLIPK.forEach(k => t[k] += f[k] || 0); t.n[f.src]++; });
   SLIPK.forEach(k => t[k] = Math.round(t[k])); t.pt = Math.min(t.pt, 2500); return t;
 }
@@ -1074,7 +1074,9 @@ function renderTax() {
   if (ST && !custom) { if (I.c80 === undefined) I.c80 = ST.pf; if (I.other === undefined) I.other = ST.pt; }
   const rangeBar = `<div class="txr"><label>From<input type="date" id="txFrom" value="${D.from}"></label><label>To<input type="date" id="txTo" value="${D.to}"></label>${custom ? '<button class="small" id="txFy">↺ FY</button>' : ''}</div>`;
   const span12 = span === 12 && D.from.slice(5) === '04-01' ? fyLabel(fy) : `${dateY(D.from)} – ${dateY(D.to)}`;
-  const d = { gross: gross || projTake, dividend: I.dividend !== undefined && I.dividend !== '' ? +I.dividend : D.dividend, interest: I.interest !== undefined && I.interest !== '' ? +I.interest : D.interest, otherInc: I.otherInc !== undefined && I.otherInc !== '' ? +I.otherInc : 0, stcg: +I.stcg || 0, ltcg: +I.ltcg || 0, c80: +I.c80 || 0, d80: +I.d80 || 0, hra: +I.hra || 0, home: +I.home || 0, nps: +I.nps || 0, other: +I.other || 0 };
+  const mealAmt = I.meal !== undefined && I.meal !== '' ? +I.meal : (!+I.gross && ST ? ST.meal : 0), mealFree = FI.mealFree !== undefined ? !!FI.mealFree : fy >= 2026;
+  const mealEx = mealAmt && mealFree ? Math.round(mealAmt) : 0;
+  const d = { gross: Math.max(0, (gross || projTake) - mealEx), dividend: I.dividend !== undefined && I.dividend !== '' ? +I.dividend : D.dividend, interest: I.interest !== undefined && I.interest !== '' ? +I.interest : D.interest, otherInc: I.otherInc !== undefined && I.otherInc !== '' ? +I.otherInc : 0, stcg: +I.stcg || 0, ltcg: +I.ltcg || 0, c80: +I.c80 || 0, d80: +I.d80 || 0, hra: +I.hra || 0, home: +I.home || 0, nps: +I.nps || 0, other: +I.other || 0 };
   if (!d.gross && !d.dividend && !d.interest) { box.innerHTML = rangeBar + `<div class="muted">${span12}: no salary or income found yet. Upload a payslip or tap <b>Enter details</b>.</div><div class="btns" style="margin:8px 0 0"><button class="small" data-slip="1">📄 Upload payslip</button><button class="small" data-tax="edit">Enter details</button></div>`; return; }
   const RU = rulesFor(fy), N = taxCalc('new', d, RU.R), O = taxCalc('old', d, RU.R), best = N.tax <= O.tax ? 'new' : 'old', B = best === 'new' ? N : O, due = Math.round(B.tax - paid);
   const left = Math.max(0, span - elapsed), perMonth = due > 0 && left ? Math.ceil(due / left / 100) * 100 : 0;
@@ -1085,7 +1087,8 @@ function renderTax() {
     <div class="chk ${due > 0 ? 'bad' : 'ok'}" style="margin-top:10px">${paid ? `Paid ${money(paid)} (TDS${fromSlip || (ST && I.tds === undefined) ? (ST.n.scaled || ST.n.proj ? ', estimated from payslips' : ' from payslips') : ''}${(FI.paid || []).length ? ' + tax payments' : ''}). ` : 'No TDS entered yet. '}${due > 0 ? `<b>${money(due)} more to pay</b>${perMonth ? ` — set aside about ${money(perMonth)} a month` : ''}.${due > (RU.R.advanceTaxAbove || 10000) && elapsed < span ? ' Above ₹10,000, advance tax is due in instalments (15 Jun, 15 Sep, 15 Dec, 15 Mar) unless your employer deducts it.' : ''}` : due < 0 ? `<b>About ${money(-due)} refund</b> when you file.` : '<b>All covered.</b>'}</div>
     ${rough ? `<p class="muted" style="margin:8px 0 0">Your salary credits are take-home (after TDS and PF), so this guess is low. Enter your <b>gross salary</b> from your payslip for a real estimate.</p>` : ''}
     <div class="label">How it's worked out (${best} regime)</div>
-    ${row(`Salary ${+I.gross ? '(gross, entered)' : fromSlip ? `(gross · ${[ST.n.slip && ST.n.slip + ' from payslips', ST.n.ytd && ST.n.ytd + ' from year-to-date', ST.n.scaled && ST.n.scaled + ' scaled from take-home', ST.n.proj && ST.n.proj + ' projected'].filter(Boolean).join(', ')})` : `(take-home ${D.months ? `${money(D.salary)} in ${D.months} months → ${money(projTake)}` : ''})`}`, money(d.gross))}
+    ${row(`Salary ${+I.gross ? '(gross, entered)' : fromSlip ? `(gross · ${[ST.n.slip && ST.n.slip + ' from payslips', ST.n.ytd && ST.n.ytd + ' from year-to-date', ST.n.scaled && ST.n.scaled + ' scaled from take-home', ST.n.proj && ST.n.proj + ' projected'].filter(Boolean).join(', ')})` : `(take-home ${D.months ? `${money(D.salary)} in ${D.months} months → ${money(projTake)}` : ''})`}`, money(d.gross + mealEx))}
+    ${mealEx ? row('− Meal coupons (tax-free)', money(mealEx)) : ''}
     ${row('− Standard deduction', money(B.sd))}
     ${d.dividend ? row('+ Dividends', money(d.dividend)) : ''}${d.interest ? row('+ Bank interest', money(d.interest)) : ''}${d.otherInc ? row('+ Other taxable income', money(d.otherInc)) : ''}
     ${best === 'old' && B.ded ? row('− Deductions (80C, 80D, HRA…)', money(B.ded)) : ''}
@@ -1093,6 +1096,7 @@ function renderTax() {
     ${row('Slab tax', money(B.slab))}${B.rebate ? row('− Rebate (87A)', money(B.rebate)) : ''}${B.cg ? row('+ Capital gains tax', money(B.cg)) : ''}${row('+ Cess 4%', money(B.cess))}
     ${row(custom ? 'Tax for this period' : 'Tax for the year', money(B.tax), 'tot')}
     <div class="btns" style="margin:10px 0 0"><button class="small" data-slip="1">📄 Upload payslip</button><button class="small" data-tax="edit">${rough ? 'Enter gross & TDS' : 'Edit details'}</button><button class="small" data-taxref="1">⟳ Refresh tax rules</button></div>
+    ${mealAmt ? `<label class="mealchk"><input type="checkbox" id="txMeal" ${mealFree ? 'checked' : ''}> <span>Meal coupons ${money(mealAmt)} are <b>tax-free</b> for me${fy < 2026 ? ' <span class="muted">(before Apr 2026: ₹50/meal, old regime only)</span>' : ''}</span></label>` : ''}
     ${Object.keys(slips()).length ? `<div class="muted" style="margin-top:6px">📄 Payslips: ${Object.keys(slips()).sort().map(m => monthName(m)).join(', ')}</div>` : ''}
     <div class="muted" style="margin-top:6px">${RU.exact ? `Using ${fyLabel(fy)} rules` : `⚠ ${fyLabel(fy)} rules not published yet — using ${fyLabel(RU.year)} rules`} · updated ${dateY(TAXR.updated)}</div>
     <p class="muted" style="margin-bottom:0">An estimate, not tax advice — check with your Form 16 / a tax advisor before filing. Surcharge (income over ₹50L) isn't included.</p>`;
@@ -1105,6 +1109,7 @@ function openTaxForm(fy) {
   openSheet(`<h3>Tax details · ${fyLabel(fy)}</h3><p class="muted" style="margin-top:2px">Only what Trickle can't see in your statements. Leave anything you don't have blank.</p>
     <div class="label">From your payslip</div>
     ${f('gross', 'Gross salary for the year (₹)', `Monthly gross × 12 + bonus. Your take-home so far: ${money(D.salary)}${D.months ? ` in ${D.months} months` : ''}.`)}
+    ${f('meal', 'Meal coupons / food card for the year (₹)', 'Filled from your payslips — type a figure only to override. Tax-free up to ₹200 a meal from Apr 2026.')}
     ${f('tds', 'TDS deducted by employer this year (₹)', 'Total for the year (monthly TDS × 12), or what Form 26AS shows so far.')}
     <div class="label">Found in your statements — change if needed</div>
     ${f('dividend', 'Dividends (₹)', '', String(D.dividend))}${f('interest', 'Savings / FD interest (₹)', '', String(D.interest))}${f('otherInc', 'Other taxable income (₹)', 'Freelance, rent received etc. Gifts from family are not taxable.', '0')}
@@ -1118,10 +1123,10 @@ function openTaxForm(fy) {
     if (ev.target.id !== 'taxSave') return;
     const o = {}; $$('#sheet [data-tk]').forEach(i => { if (i.value !== '') o[i.dataset.tk] = +i.value; });
     o.paid = $$('#sheet [data-tpaid]').filter(i => i.checked).map(i => i.dataset.tpaid);
-    S.tax = { ...(S.tax || {}), [fy]: o }; saveMeta(); closeSheet(); toast('Tax details saved');
+    if (I.mealFree !== undefined) o.mealFree = I.mealFree; S.tax = { ...(S.tax || {}), [fy]: o }; saveMeta(); closeSheet(); toast('Tax details saved');
   });
 }
-document.addEventListener('change', ev => { if (ev.target.id === 'txFrom' || ev.target.id === 'txTo') { const f = $('#txFrom').value, t = $('#txTo').value; if (f && t && f <= t) { taxRange = { from: f, to: t }; renderTax(); } else toast('“From” must be before “To”'); } });
+document.addEventListener('change', ev => { if (ev.target.id === 'txMeal') { const fy = +$('#taxBox').dataset.fy; S.tax = { ...(S.tax || {}), [fy]: { ...taxInputs(fy), mealFree: ev.target.checked } }; saveMeta(); renderTax(); toast(ev.target.checked ? 'Meal coupons: tax-free' : 'Meal coupons: taxed'); return; } if (ev.target.id === 'txFrom' || ev.target.id === 'txTo') { const f = $('#txFrom').value, t = $('#txTo').value; if (f && t && f <= t) { taxRange = { from: f, to: t }; renderTax(); } else toast('“From” must be before “To”'); } });
 document.addEventListener('click', ev => { if (ev.target.id === 'txFy') { taxRange = null; return renderTax(); } if (ev.target.closest('[data-slip]')) { fileTarget = ''; return $('#slipFile').click(); } });
 document.addEventListener('click', ev => { if (ev.target.closest('[data-taxref]')) { ev.target.closest('[data-taxref]').textContent = '⟳ Checking…'; return fetchTaxRules(true); } const b = ev.target.closest('[data-tax]'); if (b) openTaxForm(+$('#taxBox').dataset.fy || fyOf(mk(today()))); });
 let openFriend = null;
@@ -1587,8 +1592,9 @@ function parsePayslip(lines, fname) {
   const TDS = /income ?tax|\btds\b/i, PF = /provident|\bp\.?f\b|vpf|epf/i, PT = /professional|prof\.? ?tax|\bp\.?t\b/i;
   const gross = pick(/gross\s*(?:earnings|salary|pay)|total\s*earnings/) || sumF(earn, 'amt');
   const net = pick(/net\s*(?:pay|salary|amount)|take\s*home/);
-  const slip = { gross, tds: of(TDS, 'amt'), pf: of(PF, 'amt'), pt: of(PT, 'amt'), net };
-  if (earn.length && earn.every(r => r.ytd !== null)) slip.ytd = { gross: sumF(earn, 'ytd'), tds: of(TDS, 'ytd'), pf: of(PF, 'ytd'), pt: of(PT, 'ytd') };
+  const MEAL = /meal|food ?(?:card|coupon|voucher)|sodexo|pluxee|zeta/i, ofE = (re, f) => r2(earn.filter(r => re.test(r.label)).reduce((a, r) => a + (r[f] || 0), 0));
+  const slip = { gross, tds: of(TDS, 'amt'), pf: of(PF, 'amt'), pt: of(PT, 'amt'), meal: ofE(MEAL, 'amt'), net };
+  if (earn.length && earn.every(r => r.ytd !== null)) slip.ytd = { gross: sumF(earn, 'ytd'), tds: of(TDS, 'ytd'), pf: of(PF, 'ytd'), pt: of(PT, 'ytd'), meal: ofE(MEAL, 'ytd') };
   return { month, slip, earn, ded };
 }
 async function readPayslips(files) {
@@ -1601,7 +1607,7 @@ async function readPayslips(files) {
   const row = (a, b) => `<div class="settle"><span>${a}</span><b>${b}</b></div>`;
   openSheet(`<h3>📄 Payslip${got.length > 1 ? 's' : ''}</h3><p class="muted" style="margin-top:2px">Only the pay figures are saved — not your PAN, bank or employee details.</p>
     ${got.map((g, i) => `<div class="card" style="margin:10px 0;padding:12px"><label style="margin:0">Month<input type="month" data-sm="${i}" value="${g.month}"></label>
-      ${row('Gross pay', money(g.slip.gross))}${row('Income tax (TDS)', money(g.slip.tds))}${row('Provident fund', money(g.slip.pf))}${g.slip.pt ? row('Professional tax', money(g.slip.pt)) : ''}${g.slip.net ? row('Net pay', money(g.slip.net)) : ''}
+      ${row('Gross pay', money(g.slip.gross))}${row('Income tax (TDS)', money(g.slip.tds))}${row('Provident fund', money(g.slip.pf))}${g.slip.pt ? row('Professional tax', money(g.slip.pt)) : ''}${g.slip.meal ? row('Meal coupons (in gross)', money(g.slip.meal)) : ''}${g.slip.net ? row('Net pay', money(g.slip.net)) : ''}
       ${g.slip.ytd ? `<div class="muted" style="margin-top:6px">Year to date: gross ${money(g.slip.ytd.gross)} · TDS ${money(g.slip.ytd.tds)} · PF ${money(g.slip.ytd.pf)}</div>` : '<div class="muted" style="margin-top:6px">No year-to-date column — other months are estimated from your take-home.</div>'}</div>`).join('')}
     <p class="muted">The tax card will use these for gross salary, TDS, PF (80C) and professional tax. Months without a payslip are filled in from year-to-date totals or your take-home pay. Anything you typed in <b>Enter details</b> for gross or TDS is cleared so the payslip is used.</p>
     <button class="primary" id="slipSave">Save</button><button style="width:100%;margin-top:8px" id="slipNo">Cancel</button>`, ev => {
