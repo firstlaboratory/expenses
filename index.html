@@ -100,6 +100,7 @@ canvas{width:100%;display:block}
 .fab{position:fixed;right:16px;bottom:calc(72px + env(safe-area-inset-bottom));width:52px;height:52px;border-radius:50%;border:0;background:var(--accent);color:#fff;font-size:24px;box-shadow:0 4px 14px #0004;z-index:8;padding:0}
 .fab[data-n]:not([data-n=""])::after{content:attr(data-n);position:absolute;top:-4px;right:-4px;background:#e53935;color:#fff;font-size:11px;font-weight:700;min-width:18px;height:18px;line-height:18px;border-radius:9px;padding:0 4px}
 body.typing .fab,body.selecting .fab{display:none}
+.txr{display:flex;gap:8px;align-items:flex-end;margin-bottom:8px}.txr label{flex:1;margin:0;font-size:12px}.txr input{width:100%;box-sizing:border-box}.txr button{flex:0 0 auto;margin:0}
 .nline{display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--line);font-size:14px}
 .nline>span:first-child{flex:1;min-width:0;overflow-wrap:anywhere}.nline>b{white-space:nowrap}.nline button{flex:0 0 auto;margin:0}
 .nline.done{opacity:.5}.nline.done>span:first-child{text-decoration:line-through}
@@ -262,9 +263,10 @@ body.selecting main{padding-bottom:180px}
   <button data-v="settings"><b>⚙</b>Settings</button>
 </nav>
 <div id="selBar" class="selbar hidden"><div id="selCount"></div><div class="selbtns"><button data-bulk="all">All</button><button data-bulk="note">✎ Note</button><button data-bulk="cat">🏷 Cat</button><button data-bulk="friend">🤝 Friend</button><button data-bulk="trip">✈ Trip</button><button data-bulk="del" class="danger">🗑</button></div></div>
-<input type="file" id="impFile" hidden accept=".csv,.txt,.xls,.xlsx,.json,text/csv,text/plain,application/json,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet">
+<input type="file" id="slipFile" hidden multiple accept=".pdf,application/pdf">
+<input type="file" id="impFile" hidden accept=".pdf,application/pdf,.csv,.txt,.xls,.xlsx,.json,text/csv,text/plain,application/json,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet">
 <div class="sheet-bg" id="sheetBg"><div class="sheet" id="sheet"></div></div>
 <div class="toast" id="toast"></div>
-<script type="module" src="app.js?v=26"></script>
+<script type="module" src="app.js?v=27"></script>
 </body>
 </html>

@@ -3,6 +3,7 @@ import { FIREBASE_CONFIG } from './firebase-config.js';
 // ================= constants & helpers =================
 const FB = 'https://www.gstatic.com/firebasejs/10.12.2/';
 const XLSX_URL = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
+const PDFJS_URL = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js', PDFJS_WORKER = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 const LKEY = 'kharcha_v1';
 const MODES = ['UPI', 'Card', 'Cash', 'Bank'];
 const DEFAULT_CATS = [['Food','🍛','#e8833a'],['Groceries','🛒','#43a047'],['Transport','⛽','#1e88e5'],['Shopping','🛍️','#8e24aa'],['Bills','💡','#fb8c00'],['Rent','🏠','#6d4c41'],['House budget','🏡','#a1887f'],['Health','💊','#e53935'],['Entertainment','🎬','#00acc1'],['Travel','✈️','#3949ab'],['Stay','🏨','#5e35b1'],['Education','📚','#546e7a'],['Gifts','🎁','#d81b60'],['Investments','📈','#00897b'],['Other','📦','#9e9e9e']];
@@ -106,7 +107,7 @@ let S = { ...blankMeta(), expenses: [], trips: [] };
 let TE = {};                       // tripId -> [expenses]
 let user = null, fb = null, cloud = false, authKnown = false, pending = 0;
 let unsubs = [], tripUnsubs = {}, migrated = false;
-let month = mk(today()), view = 'add', curTrip = null, tripTab = 'exp', noteLink = null;
+let taxRange = null, month = mk(today()), view = 'add', curTrip = null, tripTab = 'exp', noteLink = null;
 let selCat = 'Food', selInc = 'Salary', selType = 'out', selMode = 'UPI', edit = null; // edit = {id, trip}
 
 // Accepts any saved shape (v1 with category ids, v3, cloud docs) and returns names-based data.
@@ -1019,42 +1020,80 @@ function taxCalc(regime, d, R = rulesFor(2026).R) {
   return { sd, ded, normal, stcg, ltcg, slab: r2(slab), rebate: r2(rebate), cg: r2(cg), cess: r2(cess), tax: Math.round(base + cess) };
 }
 const TAXPAY_RE = /cbdt|income ?tax|advance ?tax|self ?assess|itns|tin ?2/i;
-function taxData(fy) {
-  const from = `${fy}-04-01`, to = `${fy + 1}-03-31`, inFy = e => e.date >= from && e.date <= to, all = own().filter(inFy);
+function taxData(fy, rf, rt) {
+  const from = rf || `${fy}-04-01`, to = rt || `${fy + 1}-03-31`, inFy = e => e.date >= from && e.date <= to, all = own().filter(inFy);
   const counted = all.filter(e => isInc(e) && !isFriend(e) && !e._skip && countsOf(e) === 'income');
   const sumC = re => r2(sum(counted.filter(e => re.test(e.cat))));
   const salary = sumC(/salary/i), dividend = sumC(/dividend/i), interest = sumC(/^interest/i), otherInc = r2(sum(counted.filter(e => !/salary|dividend|^interest/i.test(e.cat))));
-  const months = [...new Set(counted.filter(e => /salary/i.test(e.cat)).map(e => mk(e.date)))].length;
+  const salByMonth = {}; counted.filter(e => /salary/i.test(e.cat)).forEach(e => { const m = mk(e.date); salByMonth[m] = (salByMonth[m] || 0) + e.amount; });
+  const months = Object.keys(salByMonth).length;
   const pays = S.expenses.filter(e => inFy(e) && !isInc(e) && (TAXPAY_RE.test(e.note) || /tax/i.test(e.cat) && TAXPAY_RE.test(e.note)));
-  return { from, to, salary, months, dividend, interest, otherInc, pays };
+  return { from, to, salary, months, salByMonth, dividend, interest, otherInc, pays };
+}
+// ---------- Payslips: monthly gross / TDS / PF / professional tax ----------
+const slips = () => ((S.tax || {}).slips || {});
+const addMonth = (m, n) => { let [y, mo] = m.split('-').map(Number); mo += n; while (mo > 12) { mo -= 12; y++; } while (mo < 1) { mo += 12; y--; } return `${y}-${String(mo).padStart(2, '0')}`; };
+const monthsIn = (from, to) => { const out = []; for (let m = from.slice(0, 7); m <= to.slice(0, 7); m = addMonth(m, 1)) out.push(m); return out; };
+const SLIPK = ['gross', 'tds', 'pf', 'pt'];
+const monthName = m => { const [y, mo] = m.split('-').map(Number); return new Date(y, mo - 1, 1).toLocaleDateString('en-IN', { month: 'short', year: 'numeric' }); };
+// Figures for one month: the payslip itself, else spread from a later payslip's year-to-date, else scaled from take-home, else projected from the latest payslip
+function monthFig(m, salByMonth) {
+  const P = slips(), keys = Object.keys(P).sort(); if (!keys.length) return null;
+  if (P[m]) return { ...P[m], src: 'slip' };
+  const fy = fyOf(m), fyStart = `${fy}-04`;
+  const later = keys.find(k => k > m && fyOf(k) === fy && P[k].ytd);
+  if (later) {
+    const span = monthsIn(fyStart, addMonth(later, -1)), missing = span.filter(k => !P[k]);
+    const o = { src: 'ytd' }; SLIPK.forEach(f => { const known = sum(span.filter(k => P[k]).map(k => ({ amount: +P[k][f] || 0 }))) + (+P[later][f] || 0); o[f] = Math.max(0, ((+P[later].ytd[f] || 0) - known) / (missing.length || 1)); }); return o;
+  }
+  const gap = k => Math.abs(monthsIn(k < m ? k : m, k < m ? m : k).length), near = keys.reduce((a, k) => gap(k) < gap(a) ? k : a, keys[0]), N = P[near];
+  const credit = salByMonth[m];
+  if (credit && N.net) { const r = credit / N.net, o = { src: 'scaled' }; SLIPK.forEach(f => o[f] = (+N[f] || 0) * r); return o; }
+  if (m >= mk(today())) { const o = { src: 'proj' }; SLIPK.forEach(f => o[f] = +N[f] || 0); return o; }
+  return { src: 'none', gross: 0, tds: 0, pf: 0, pt: 0 };
+}
+function slipTotals(from, to, salByMonth) {
+  if (!Object.keys(slips()).length) return null;
+  const t = { gross: 0, tds: 0, pf: 0, pt: 0, n: { slip: 0, ytd: 0, scaled: 0, proj: 0, none: 0 } };
+  monthsIn(from, to).forEach(m => { const f = monthFig(m, salByMonth); if (!f) return; SLIPK.forEach(k => t[k] += f[k] || 0); t.n[f.src]++; });
+  SLIPK.forEach(k => t[k] = Math.round(t[k])); t.pt = Math.min(t.pt, 2500); return t;
 }
 function taxInputs(fy) { return { ...((S.tax || {})[fy] || {}) }; }
 function renderTax() {
   const box = $('#taxBox'); if (!box) return;
-  const fy = fyOf(pKey().length === 4 ? (pKey() === mk(today()).slice(0, 4) ? mk(today()) : pKey() + '-12') : pKey()), D = taxData(fy), I = taxInputs(fy);
-  const now = today(), elapsed = now < D.from ? 0 : now > D.to ? 12 : (() => { const [y, m] = now.split('-').map(Number); return (y - fy) * 12 + m - 3; })();
-  const projTake = D.months ? Math.round(D.salary / D.months * 12) : 0;
-  const gross = +I.gross || 0, rough = !gross;
-  const paid = r2((+I.tds || 0) + sum(D.pays.filter(e => (I.paid || []).includes(e.id))));
+  const fy0 = fyOf(pKey().length === 4 ? (pKey() === mk(today()).slice(0, 4) ? mk(today()) : pKey() + '-12') : pKey());
+  const custom = !!(taxRange && taxRange.from && taxRange.to && taxRange.from <= taxRange.to);
+  const fy = custom ? fyOf(taxRange.to.slice(0, 7)) : fy0, D = custom ? taxData(fy, taxRange.from, taxRange.to) : taxData(fy), I = custom ? {} : taxInputs(fy), FI = taxInputs(fy);
+  const span = monthsIn(D.from, D.to).length, now = today(), nowM = mk(now);
+  const elapsed = now < D.from ? 0 : now > D.to ? span : monthsIn(D.from, now).length - 1;
+  const projTake = D.months ? Math.round(D.salary / D.months * span) : 0;
+  const ST = slipTotals(D.from, D.to, D.salByMonth);
+  const gross = +I.gross || (ST && ST.gross) || 0, rough = !gross, fromSlip = !+I.gross && ST && ST.gross;
+  const tdsAmt = I.tds !== undefined && I.tds !== '' ? +I.tds : ST ? ST.tds : 0;
+  const paid = r2(tdsAmt + sum(D.pays.filter(e => (FI.paid || []).includes(e.id))));
+  if (ST && !custom) { if (I.c80 === undefined) I.c80 = ST.pf; if (I.other === undefined) I.other = ST.pt; }
+  const rangeBar = `<div class="txr"><label>From<input type="date" id="txFrom" value="${D.from}"></label><label>To<input type="date" id="txTo" value="${D.to}"></label>${custom ? '<button class="small" id="txFy">↺ FY</button>' : ''}</div>`;
+  const span12 = span === 12 && D.from.slice(5) === '04-01' ? fyLabel(fy) : `${dateY(D.from)} – ${dateY(D.to)}`;
   const d = { gross: gross || projTake, dividend: I.dividend !== undefined && I.dividend !== '' ? +I.dividend : D.dividend, interest: I.interest !== undefined && I.interest !== '' ? +I.interest : D.interest, otherInc: I.otherInc !== undefined && I.otherInc !== '' ? +I.otherInc : 0, stcg: +I.stcg || 0, ltcg: +I.ltcg || 0, c80: +I.c80 || 0, d80: +I.d80 || 0, hra: +I.hra || 0, home: +I.home || 0, nps: +I.nps || 0, other: +I.other || 0 };
-  if (!d.gross && !d.dividend && !d.interest) { box.innerHTML = `<div class="muted">${fyLabel(fy)}: no salary or income found yet. Tap <b>Enter details</b> to add your gross salary from your payslip.</div><button class="small" data-tax="edit" style="margin-top:8px">Enter details</button>`; return; }
+  if (!d.gross && !d.dividend && !d.interest) { box.innerHTML = rangeBar + `<div class="muted">${span12}: no salary or income found yet. Upload a payslip or tap <b>Enter details</b>.</div><div class="btns" style="margin:8px 0 0"><button class="small" data-slip="1">📄 Upload payslip</button><button class="small" data-tax="edit">Enter details</button></div>`; return; }
   const RU = rulesFor(fy), N = taxCalc('new', d, RU.R), O = taxCalc('old', d, RU.R), best = N.tax <= O.tax ? 'new' : 'old', B = best === 'new' ? N : O, due = Math.round(B.tax - paid);
-  const left = Math.max(0, 12 - elapsed), perMonth = due > 0 && left ? Math.ceil(due / left / 100) * 100 : 0;
+  const left = Math.max(0, span - elapsed), perMonth = due > 0 && left ? Math.ceil(due / left / 100) * 100 : 0;
   const row = (a, b, cls = '') => `<div class="settle ${cls}"><span>${a}</span><b>${String(b).replace(/\.\d+$/, '')}</b></div>`;
-  box.innerHTML = `<div class="muted">${fyLabel(fy)} · estimate${rough ? ' (rough — uses your take-home pay)' : ''}</div>
-    <div class="big" style="font-size:26px">${money(B.tax)} <span class="muted" style="font-size:14px;font-weight:400">tax for the year · ${best} regime</span></div>
+  box.innerHTML = rangeBar + `<div class="muted">${span12} · estimate${rough ? ' (rough — uses your take-home pay)' : ''}${custom && span !== 12 ? ` · ${span} months, taxed as one year` : ''}</div>
+    <div class="big" style="font-size:26px">${money(B.tax)} <span class="muted" style="font-size:14px;font-weight:400">tax ${custom ? 'for this period' : 'for the year'} · ${best} regime</span></div>
     <div class="muted">${best === 'new' ? 'New' : 'Old'} regime saves ${money(Math.abs(O.tax - N.tax))} (new ${money(N.tax)} · old ${money(O.tax)})</div>
-    <div class="chk ${due > 0 ? 'bad' : 'ok'}" style="margin-top:10px">${paid ? `Paid so far ${money(paid)} (TDS${(I.paid || []).length ? ' + tax payments' : ''}). ` : 'No TDS entered yet. '}${due > 0 ? `<b>${money(due)} more to pay</b>${perMonth ? ` — set aside about ${money(perMonth)} a month` : ''}.${due > (RU.R.advanceTaxAbove || 10000) && elapsed < 12 ? ' Above ₹10,000, advance tax is due in instalments (15 Jun, 15 Sep, 15 Dec, 15 Mar) unless your employer deducts it.' : ''}` : due < 0 ? `<b>About ${money(-due)} refund</b> when you file.` : '<b>All covered.</b>'}</div>
+    <div class="chk ${due > 0 ? 'bad' : 'ok'}" style="margin-top:10px">${paid ? `Paid ${money(paid)} (TDS${fromSlip || (ST && I.tds === undefined) ? (ST.n.scaled || ST.n.proj ? ', estimated from payslips' : ' from payslips') : ''}${(FI.paid || []).length ? ' + tax payments' : ''}). ` : 'No TDS entered yet. '}${due > 0 ? `<b>${money(due)} more to pay</b>${perMonth ? ` — set aside about ${money(perMonth)} a month` : ''}.${due > (RU.R.advanceTaxAbove || 10000) && elapsed < span ? ' Above ₹10,000, advance tax is due in instalments (15 Jun, 15 Sep, 15 Dec, 15 Mar) unless your employer deducts it.' : ''}` : due < 0 ? `<b>About ${money(-due)} refund</b> when you file.` : '<b>All covered.</b>'}</div>
     ${rough ? `<p class="muted" style="margin:8px 0 0">Your salary credits are take-home (after TDS and PF), so this guess is low. Enter your <b>gross salary</b> from your payslip for a real estimate.</p>` : ''}
     <div class="label">How it's worked out (${best} regime)</div>
-    ${row(`Salary ${gross ? '(gross, entered)' : `(take-home ${D.months ? `${money(D.salary)} in ${D.months} months → ${money(projTake)}/yr` : ''})`}`, money(d.gross))}
+    ${row(`Salary ${+I.gross ? '(gross, entered)' : fromSlip ? `(gross · ${[ST.n.slip && ST.n.slip + ' from payslips', ST.n.ytd && ST.n.ytd + ' from year-to-date', ST.n.scaled && ST.n.scaled + ' scaled from take-home', ST.n.proj && ST.n.proj + ' projected'].filter(Boolean).join(', ')})` : `(take-home ${D.months ? `${money(D.salary)} in ${D.months} months → ${money(projTake)}` : ''})`}`, money(d.gross))}
     ${row('− Standard deduction', money(B.sd))}
     ${d.dividend ? row('+ Dividends', money(d.dividend)) : ''}${d.interest ? row('+ Bank interest', money(d.interest)) : ''}${d.otherInc ? row('+ Other taxable income', money(d.otherInc)) : ''}
     ${best === 'old' && B.ded ? row('− Deductions (80C, 80D, HRA…)', money(B.ded)) : ''}
     ${row('Taxable income (slab)', money(B.normal))}${d.stcg ? row('Short-term gains (20%)', money(d.stcg)) : ''}${d.ltcg ? row('Long-term gains (12.5% above ₹1.25L)', money(d.ltcg)) : ''}
     ${row('Slab tax', money(B.slab))}${B.rebate ? row('− Rebate (87A)', money(B.rebate)) : ''}${B.cg ? row('+ Capital gains tax', money(B.cg)) : ''}${row('+ Cess 4%', money(B.cess))}
-    ${row('Tax for the year', money(B.tax), 'tot')}
-    <div class="btns" style="margin:10px 0 0"><button class="small" data-tax="edit">${rough ? 'Enter gross salary & TDS' : 'Edit details'}</button><button class="small" data-taxref="1">⟳ Refresh tax rules</button></div>
+    ${row(custom ? 'Tax for this period' : 'Tax for the year', money(B.tax), 'tot')}
+    <div class="btns" style="margin:10px 0 0"><button class="small" data-slip="1">📄 Upload payslip</button><button class="small" data-tax="edit">${rough ? 'Enter gross & TDS' : 'Edit details'}</button><button class="small" data-taxref="1">⟳ Refresh tax rules</button></div>
+    ${Object.keys(slips()).length ? `<div class="muted" style="margin-top:6px">📄 Payslips: ${Object.keys(slips()).sort().map(m => monthName(m)).join(', ')}</div>` : ''}
     <div class="muted" style="margin-top:6px">${RU.exact ? `Using ${fyLabel(fy)} rules` : `⚠ ${fyLabel(fy)} rules not published yet — using ${fyLabel(RU.year)} rules`} · updated ${dateY(TAXR.updated)}</div>
     <p class="muted" style="margin-bottom:0">An estimate, not tax advice — check with your Form 16 / a tax advisor before filing. Surcharge (income over ₹50L) isn't included.</p>`;
   box.dataset.fy = fy;
@@ -1082,6 +1121,8 @@ function openTaxForm(fy) {
     S.tax = { ...(S.tax || {}), [fy]: o }; saveMeta(); closeSheet(); toast('Tax details saved');
   });
 }
+document.addEventListener('change', ev => { if (ev.target.id === 'txFrom' || ev.target.id === 'txTo') { const f = $('#txFrom').value, t = $('#txTo').value; if (f && t && f <= t) { taxRange = { from: f, to: t }; renderTax(); } else toast('“From” must be before “To”'); } });
+document.addEventListener('click', ev => { if (ev.target.id === 'txFy') { taxRange = null; return renderTax(); } if (ev.target.closest('[data-slip]')) { fileTarget = ''; return $('#slipFile').click(); } });
 document.addEventListener('click', ev => { if (ev.target.closest('[data-taxref]')) { ev.target.closest('[data-taxref]').textContent = '⟳ Checking…'; return fetchTaxRules(true); } const b = ev.target.closest('[data-tax]'); if (b) openTaxForm(+$('#taxBox').dataset.fy || fyOf(mk(today()))); });
 let openFriend = null;
 function renderFriends() {
@@ -1336,6 +1377,7 @@ async function readExcel(file) { const X = await loadXLSX(); const wb = X.read(a
 async function importFile(file, target) {
   try {
     let rows; const name = file.name.toLowerCase();
+    if (/\.pdf$/.test(name) || file.type === 'application/pdf') return readPayslips([file]);
     if (/\.xlsx?$/.test(name)) rows = await readExcel(file);
     else {
       const text = (await file.text()).replace(/^﻿/, '');
@@ -1509,3 +1551,66 @@ if ('serviceWorker' in navigator) {
 // Hide the floating notes button while the keyboard is up
 document.addEventListener('focusin', e => { if (e.target.matches('input:not([type=checkbox]):not([type=radio]):not([type=file]),textarea') && !e.target.closest('#sheet')) document.body.classList.add('typing'); });
 document.addEventListener('focusout', () => setTimeout(() => { const a = document.activeElement; if (!a || !a.matches('input,textarea')) document.body.classList.remove('typing'); }, 50));
+
+// ---------- Payslip PDF reader ----------
+async function loadPDF() {
+  if (window.pdfjsLib) return window.pdfjsLib;
+  await new Promise((res, rej) => { const s = document.createElement('script'); s.src = PDFJS_URL; s.onload = res; s.onerror = () => rej(new Error('The PDF reader needs internet the first time')); document.head.appendChild(s); });
+  window.pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS_WORKER; return window.pdfjsLib;
+}
+async function pdfLines(file) {
+  const L = await loadPDF(), doc = await L.getDocument({ data: new Uint8Array(await file.arrayBuffer()) }).promise, lines = [];
+  for (let p = 1; p <= Math.min(doc.numPages, 3); p++) {
+    const tc = await (await doc.getPage(p)).getTextContent(), rows = [];
+    tc.items.filter(i => i.str.trim()).forEach(i => { const y = i.transform[5], x = i.transform[4]; let r = rows.find(r => Math.abs(r.y - y) < 3); if (!r) rows.push(r = { y, it: [] }); r.it.push({ x, s: i.str.trim() }); });
+    rows.sort((a, b) => b.y - a.y).forEach(r => lines.push(r.it.sort((a, b) => a.x - b.x).map(i => i.s).join(' ')));
+  }
+  return lines;
+}
+const MONTHS3 = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+const DED_RE = /provident|\bp\.?f\b|vpf|epf|professional|prof\.? ?tax|\bp\.?t\b|income ?tax|\btds\b|deduction|recovery|\besi|\blwf|loan|advance|nps|welfare|insurance premium/i;
+function parsePayslip(lines, fname) {
+  const text = lines.join('\n'); let month = '';
+  const mm = text.match(/pay\s*slip[^\n]{0,30}?\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*[\s\-'’,.]*(\d{4}|\d{2})\b/i) || text.match(/\b(?:month|period)[^\n]{0,15}?\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*[\s\-'’,.]*(\d{4}|\d{2})\b/i) || String(fname).match(/(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*[\s_\-]*(\d{4})/i);
+  if (mm) { const y = mm[2].length === 2 ? '20' + mm[2] : mm[2]; month = `${y}-${String(MONTHS3.indexOf(mm[1].toLowerCase()) + 1).padStart(2, '0')}`; }
+  const N = '(-?\\d[\\d,]*\\.\\d{1,2}|-?\\d{1,3}(?:,\\d{2,3})+|-?\\d+)';
+  const pick = re => { for (const l of lines) { const m = l.match(new RegExp('(?:' + re.source + ')\\s*:?\\s*(?:rs\\.?|₹|inr)?\\s*' + N, 'i')); if (m) return num(m[1]); } return 0; };
+  let start = lines.findIndex(l => /earnings/i.test(l) && /deductions?/i.test(l)); if (start < 0) start = lines.findIndex(l => /earnings/i.test(l));
+  const earn = [], ded = [];
+  if (start >= 0) for (const l of lines.slice(start + 1)) {
+    if (/gross|total|net\s*pay|net\s*salary|in words/i.test(l) && !/[a-z]{3,}.*\d.*[a-z]{3,}.*\d/i.test(l.replace(/gross|total|earnings|deductions|net|pay|salary/gi, ''))) break;
+    const re = new RegExp('([A-Za-z][A-Za-z0-9 .&()/\'’-]*?)\\s*:?\\s+' + N + '(?:\\s+' + N + ')?(?=\\s|$)', 'g'); let m;
+    while ((m = re.exec(l))) { const label = m[1].trim(); if (label.length < 2) continue; (DED_RE.test(label) && !/allowance/i.test(label) ? ded : earn).push({ label, amt: num(m[2]), ytd: m[3] !== undefined ? num(m[3]) : null }); }
+  }
+  const sumF = (L, f) => r2(L.reduce((a, r) => a + (r[f] || 0), 0));
+  const of = (re, f) => r2(ded.filter(r => re.test(r.label)).reduce((a, r) => a + (r[f] || 0), 0));
+  const TDS = /income ?tax|\btds\b/i, PF = /provident|\bp\.?f\b|vpf|epf/i, PT = /professional|prof\.? ?tax|\bp\.?t\b/i;
+  const gross = pick(/gross\s*(?:earnings|salary|pay)|total\s*earnings/) || sumF(earn, 'amt');
+  const net = pick(/net\s*(?:pay|salary|amount)|take\s*home/);
+  const slip = { gross, tds: of(TDS, 'amt'), pf: of(PF, 'amt'), pt: of(PT, 'amt'), net };
+  if (earn.length && earn.every(r => r.ytd !== null)) slip.ytd = { gross: sumF(earn, 'ytd'), tds: of(TDS, 'ytd'), pf: of(PF, 'ytd'), pt: of(PT, 'ytd') };
+  return { month, slip, earn, ded };
+}
+async function readPayslips(files) {
+  const got = [];
+  for (const f of files) {
+    try { const r = parsePayslip(await pdfLines(f), f.name); if (r.slip.gross > 0) got.push({ ...r, name: f.name }); else toast(`Couldn't find pay figures in ${f.name}`); }
+    catch (e) { toast(e.message || `Couldn't read ${f.name}`); }
+  }
+  if (!got.length) return;
+  const row = (a, b) => `<div class="settle"><span>${a}</span><b>${b}</b></div>`;
+  openSheet(`<h3>📄 Payslip${got.length > 1 ? 's' : ''}</h3><p class="muted" style="margin-top:2px">Only the pay figures are saved — not your PAN, bank or employee details.</p>
+    ${got.map((g, i) => `<div class="card" style="margin:10px 0;padding:12px"><label style="margin:0">Month<input type="month" data-sm="${i}" value="${g.month}"></label>
+      ${row('Gross pay', money(g.slip.gross))}${row('Income tax (TDS)', money(g.slip.tds))}${row('Provident fund', money(g.slip.pf))}${g.slip.pt ? row('Professional tax', money(g.slip.pt)) : ''}${g.slip.net ? row('Net pay', money(g.slip.net)) : ''}
+      ${g.slip.ytd ? `<div class="muted" style="margin-top:6px">Year to date: gross ${money(g.slip.ytd.gross)} · TDS ${money(g.slip.ytd.tds)} · PF ${money(g.slip.ytd.pf)}</div>` : '<div class="muted" style="margin-top:6px">No year-to-date column — other months are estimated from your take-home.</div>'}</div>`).join('')}
+    <p class="muted">The tax card will use these for gross salary, TDS, PF (80C) and professional tax. Months without a payslip are filled in from year-to-date totals or your take-home pay. Anything you typed in <b>Enter details</b> for gross or TDS is cleared so the payslip is used.</p>
+    <button class="primary" id="slipSave">Save</button><button style="width:100%;margin-top:8px" id="slipNo">Cancel</button>`, ev => {
+    if (ev.target.id === 'slipNo') return closeSheet();
+    if (ev.target.id !== 'slipSave') return;
+    const P = { ...slips() }, fys = new Set();
+    for (const [i, g] of got.entries()) { const m = $(`#sheet [data-sm="${i}"]`).value; if (!/^\d{4}-\d{2}$/.test(m)) return toast('Pick the month for each payslip'); P[m] = g.slip; fys.add(fyOf(m)); }
+    const T = { ...(S.tax || {}), slips: P }; fys.forEach(fy => { if (T[fy]) { const o = { ...T[fy] }; delete o.gross; delete o.tds; T[fy] = o; } });
+    S.tax = T; saveMeta(); closeSheet(); go('stats'); toast(`Payslip${got.length > 1 ? 's' : ''} saved`); setTimeout(() => $('#taxBox')?.scrollIntoView({ block: 'start', behavior: 'smooth' }), 300);
+  });
+}
+$('#slipFile').onchange = async e => { const fs = [...e.target.files]; e.target.value = ''; if (fs.length) await readPayslips(fs); };
