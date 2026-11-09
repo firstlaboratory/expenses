@@ -1,11 +1,10 @@
 rules_version = '2';
+// Template only. The live rules are pasted in the Firebase console (Firestore → Rules),
+// with OWNER_UID replaced by the owner's Firebase user ID. Nothing personal is kept in this repo.
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Private: only Guru's Google account can read or write anything.
     function isOwner() {
-      return request.auth != null
-        && request.auth.token.email == 'OWNER_EMAIL_REMOVED'
-        && request.auth.token.email_verified == true;
+      return request.auth != null && request.auth.uid == 'OWNER_UID';
     }
 
     match /users/{uid} {
@@ -27,6 +26,11 @@ service cloud.firestore {
         allow read, write: if isOwner()
           && request.auth.uid in get(/databases/$(database)/documents/trips/$(tripId)).data.memberUids;
       }
+    }
+
+    // Everything else is closed.
+    match /{document=**} {
+      allow read, write: if false;
     }
   }
 }
