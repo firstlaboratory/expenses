@@ -1479,7 +1479,7 @@ function hval(h) {   // current value, cost and day change in ₹
   const day = q && q.p && q.pc ? (q.p - q.pc) * h.qty * rate : 0;
   return { val, cost, day, price, live, t: q && q.t };
 }
-function savePF(P) { S.portfolio = { holdings: P.holdings, goal: +P.goal || 1e7, hist: P.hist || {}, imported: P.imported || '' }; saveMeta(); }
+function savePF(P) { S.portfolio = { holdings: P.holdings, goal: +P.goal || 1e7, hist: P.hist || {}, imported: P.imported || '', inv: P.inv || {} }; saveMeta(); }
 function snapHist() {   // one total per day, so progress can be charted later (and read from the Drive backup)
   const P = PF(); if (!P.holdings.length) return;
   const tot = Math.round(P.holdings.reduce((a, h) => a + hval(h).val, 0)), d = today();
@@ -1649,7 +1649,8 @@ async function importHoldings(files) {
       if (!pick.length) return toast('Nothing selected');
       const same = x => x.src !== 'manual' && (x.plat || 'Zerodha').toLowerCase() === plat.toLowerCase();
       const keep = P.holdings.filter(x => !same(x));
-      closeSheet(); savePF({ ...P, holdings: [...pick, ...keep], imported: today() });
+      const inv = { ...(P.inv || {}) }; if (pick.some(h => h.avg > 0)) Object.keys(inv).forEach(k => { if (k.toLowerCase() === plat.toLowerCase()) delete inv[k]; });   // the new file has buy prices: use them
+      closeSheet(); savePF({ ...P, inv, holdings: [...pick, ...keep], imported: today() });
       toast(`Imported ${pick.length} holdings from ${plat}`); refreshPrices(false);
     });
     const note = () => { const plat = ($('#impPlat').value || '').trim().toLowerCase(), n = PF().holdings.filter(x => x.src !== 'manual' && (x.plat || '').toLowerCase() === plat).length;
@@ -1696,7 +1697,11 @@ function holdingForm(h) {
 // ---- render ----
 function renderPort() {
   const P = PF(), H = P.holdings, goal = +P.goal || 1e7;
-  const V = H.map(h => ({ h, ...hval(h) })), tot = V.reduce((a, x) => a + x.val, 0), cost = V.reduce((a, x) => a + x.cost, 0), day = V.reduce((a, x) => a + x.day, 0);
+  const INV = P.inv || {}, acctOf = h => (h.plat || 'Other').trim() || 'Other', rawA = {};
+  const V = H.map(h => ({ h, ...hval(h) }));
+  V.forEach(x => { if (x.h.kind !== 'FIX') rawA[acctOf(x.h)] = (rawA[acctOf(x.h)] || 0) + x.cost; });
+  const adj = a => INV[a] > 0 && a in rawA ? INV[a] - rawA[a] : 0;   // invested amount typed for an account replaces its buy-price total
+  const tot = V.reduce((a, x) => a + x.val, 0), cost = V.reduce((a, x) => a + x.cost, 0) + Object.keys(rawA).reduce((t, a) => t + adj(a), 0), day = V.reduce((a, x) => a + x.day, 0);
   const pl = tot - cost, pct = Math.min(100, tot / goal * 100), stale = V.filter(x => x.h.kind !== 'FIX' && !x.live).length;
   const upd = PX._t ? new Date(PX._t) : null, updTxt = upd ? (today() === upd.toISOString().slice(0, 10) ? 'today ' : niceDate(upd.toISOString().slice(0, 10)) + ' ') + upd.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'never';
   const hist = P.hist || {}, hk = Object.keys(hist).sort(), mAgo = hk.filter(d => d <= new Date(Date.now() - 30 * 864e5).toISOString().slice(0, 10)).pop();
@@ -1712,12 +1717,13 @@ function renderPort() {
   $('#portMix').innerHTML = H.length && tot ? `<div class="label" style="margin-top:0">Mix</div>${Object.keys(KINDS).filter(k => byK[k]).map(k => `<div style="margin:6px 0"><div class="row"><span>${KINDS[k][0]}</span><b style="text-align:right">${money(Math.round(byK[k]))} <span class="muted">${Math.round(byK[k] / tot * 100)}%</span></b></div><div class="bar"><i style="width:${byK[k] / tot * 100}%;background:${KINDS[k][1]}"></i></div></div>`).join('')}` : '';
   $('#portMix').hidden = !$('#portMix').innerHTML;
   // ---- accounts (each demat / broker account = a "platform" name; e.g. "Zerodha – Guru", "Zerodha – Amma") ----
-  const acctOf = h => (h.plat || 'Other').trim() || 'Other', byA = {};
+  const byA = {};
   V.forEach(x => { const a = acctOf(x.h), o = byA[a] || (byA[a] = { val: 0, cost: 0, day: 0, n: 0, fix: 0 }); o.val += x.val; o.cost += x.cost; o.day += x.day; o.n++; if (x.h.kind === 'FIX') o.fix += x.val; });
+  Object.keys(byA).forEach(a => { byA[a].cost += adj(a); });
   const accts = Object.keys(byA).sort((a, b) => byA[b].val - byA[a].val);
   if (pAcct && !byA[pAcct]) pAcct = '';
   $('#portAccts').innerHTML = accts.length ? `<div class="row" style="align-items:center"><div class="label" style="margin:0">Accounts · ${accts.length}</div><span class="muted" style="text-align:right">tap to filter</span></div>${accts.map(a => { const o = byA[a], g = o.cost - o.fix ? (o.val - o.cost) / (o.cost - o.fix) * 100 : 0;
-      return `<div class="item${pAcct === a ? ' picked' : ''}" data-acct="${esc(a)}" style="${pAcct && pAcct !== a ? 'opacity:.5' : ''}"><div class="mid"><div class="t">${esc(a)} <button class="link small" data-ren="${esc(a)}" style="padding:0 4px" title="Rename">✎</button><button class="link small" data-upd="${esc(a)}" style="padding:0 4px" title="Update from a new file">⬆</button><button class="link small" data-adel="${esc(a)}" style="padding:0 4px;color:var(--up,#e53935)" title="Delete account">🗑</button></div><div class="s">${o.n} holding${o.n > 1 ? 's' : ''} · ${tot ? Math.round(o.val / tot * 100) : 0}% of total${o.day ? ` · <span class="${o.day >= 0 ? 'down' : 'up'}">${o.day >= 0 ? '▲' : '▼'} ${money(Math.abs(Math.round(o.day)))} today</span>` : ''}</div></div><div class="a" style="text-align:right">${money(Math.round(o.val))}${o.cost - o.fix ? `<div class="s ${g >= 0 ? 'down' : 'up'}" style="font-weight:400">${g >= 0 ? '+' : ''}${g.toFixed(1)}%</div>` : ''}</div></div>`; }).join('')}` : '';
+      return `<div class="item${pAcct === a ? ' picked' : ''}" data-acct="${esc(a)}" style="${pAcct && pAcct !== a ? 'opacity:.5' : ''}"><div class="mid"><div class="t">${esc(a)} <button class="link small" data-ren="${esc(a)}" style="padding:0 4px" title="Rename">✎</button><button class="link small" data-upd="${esc(a)}" style="padding:0 4px" title="Update from a new file">⬆</button><button class="link small" data-adel="${esc(a)}" style="padding:0 4px;color:var(--up,#e53935)" title="Delete account">🗑</button></div><div class="s">${o.n} holding${o.n > 1 ? 's' : ''} · ${tot ? Math.round(o.val / tot * 100) : 0}% of total${a in rawA ? ` · <button class="link small" data-inv="${esc(a)}" style="padding:0">${o.cost - o.fix ? 'invested ' + money(Math.round(o.cost - o.fix)) + (INV[a] > 0 ? ' (yours)' : '') : 'set invested'} ✎</button>` : ''}${o.day ? ` · <span class="${o.day >= 0 ? 'down' : 'up'}">${o.day >= 0 ? '▲' : '▼'} ${money(Math.abs(Math.round(o.day)))} today</span>` : ''}</div></div><div class="a" style="text-align:right">${money(Math.round(o.val))}${o.cost - o.fix ? `<div class="s ${g >= 0 ? 'down' : 'up'}" style="font-weight:400">${g >= 0 ? '+' : ''}${g.toFixed(1)}%</div>` : ''}</div></div>`; }).join('')}` : '';
   $('#portAccts').hidden = !accts.length;
   $$('#portGroup button').forEach(b => b.classList.toggle('on', b.dataset.g === pGroup));
   $('#portGroup').hidden = !H.length;
@@ -1746,13 +1752,18 @@ $('#portGroup').onclick = e => { const b = e.target.closest('[data-g]'); if (!b)
 $('#portAccts').onclick = e => {
   const ren = e.target.closest('[data-ren]');
   if (ren) { const old = ren.dataset.ren, nn = (prompt('Account name (e.g. "Zerodha – Guru")', old) || '').trim(); if (!nn || nn === old) return;
-    const P = PF(); savePF({ ...P, holdings: P.holdings.map(h => (h.plat || 'Other').trim() === old ? { ...h, plat: nn } : h) }); if (pAcct === old) pAcct = nn; return toast('Renamed to ' + nn); }
+    const P = PF(), inv = { ...(P.inv || {}) }; if (old in inv) { inv[nn] = inv[old]; delete inv[old]; } savePF({ ...P, inv, holdings: P.holdings.map(h => (h.plat || 'Other').trim() === old ? { ...h, plat: nn } : h) }); if (pAcct === old) pAcct = nn; return toast('Renamed to ' + nn); }
+  const iv = e.target.closest('[data-inv]');
+  if (iv) { const a = iv.dataset.inv, P = PF(), inv = { ...(P.inv || {}) };
+    const s = prompt(`Total invested in ${a} (₹).\nLeave empty to use the buy prices from the file.`, inv[a] ? String(inv[a]) : '');
+    if (s === null) return; const v = numv(s); if (v > 0) inv[a] = Math.round(v * 100) / 100; else delete inv[a];
+    savePF({ ...P, inv }); return toast(v > 0 ? `Invested in ${a}: ${money(Math.round(v))}` : `${a} now uses buy prices from the file`); }
   const upd = e.target.closest('[data-upd]');
   if (upd) { impPreset = upd.dataset.upd; toast('Pick the new holdings file for ' + impPreset); return $('#holdFile').click(); }
   const del = e.target.closest('[data-adel]');
   if (del) { const a = del.dataset.adel, P = PF(), of = h => ((h.plat || 'Other').trim() || 'Other') === a, n = P.holdings.filter(of).length;
     if (!confirm(`Delete the account "${a}" and its ${n} holding${n > 1 ? 's' : ''}? Your other accounts, goal and value history stay.`)) return;
-    savePF({ ...P, holdings: P.holdings.filter(h => !of(h)) }); if (pAcct === a) pAcct = ''; snapHist(); return toast(`Deleted ${a}`); }
+    const inv = { ...(P.inv || {}) }; delete inv[a]; savePF({ ...P, inv, holdings: P.holdings.filter(h => !of(h)) }); if (pAcct === a) pAcct = ''; snapHist(); return toast(`Deleted ${a}`); }
   const r = e.target.closest('[data-acct]'); if (!r) return; pAcct = pAcct === r.dataset.acct ? '' : r.dataset.acct; schedule();
   if (pAcct) setTimeout(() => $('#portList').scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
 };
