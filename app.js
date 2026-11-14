@@ -1568,28 +1568,61 @@ function portAuto() {   // while the Portfolio tab is open: refresh every 5 min 
 }
 document.addEventListener('visibilitychange', () => { if (!document.hidden) portAuto(); });
 
-// ---- Zerodha Console holdings import (Equity / Mutual Funds sheets, .xlsx or .csv) ----
+// ---- holdings import: any broker's CSV / Excel (Zerodha, Aionion, Groww, Upstox, INDmoney, NSE IX, Vested, CDSL, CAMS…) ----
+// Finds the header row by matching common column names, then reads symbol/name, ISIN, quantity, average price
+// (or invested amount), and last price (or current value). Each import replaces the earlier import from the same platform.
+const HCOL = {
+  sym: [/^(trading ?)?symbol$/, /^tradingsymbol$/, /^ticker$/, /^scrip( ?code| ?id)?$/, /^stock( ?symbol)?$/, /^instrument$/, /^nse ?(symbol|code)$/, /symbol/],
+  name: [/^(scrip|stock|security|company|instrument|scheme|fund|asset|holding)( ?name)?$/, /^name$/, /^description$/, /^isin ?(name|description)$/, /scheme|fund name|security name|company name|stock name|scrip name/],
+  isin: [/^isin( ?code| ?no\.?)?$/, /isin/],
+  qty: [/^(total |net |current |holding |free |available |closing |balance )?(qty|quantity|units|shares)( held| available| owned)?$/, /^quantity available$/, /^(current|free|closing) ?bal(ance)?$/, /^holdings?$/, /^no\.? ?of (shares|units)$/, /qty|quantity|units|shares/],
+  avg: [/^avg\.? ?(buy |cost |purchase )?(price|cost|nav|rate)?$/, /^average ?(buy |cost |purchase )?(price|cost|nav|rate)?$/, /^(buy|cost|purchase) ?(avg|average)?\.? ?(price|rate|nav)$/, /avg|average/],
+  inv: [/^(invested|investment|buy|cost|purchase|total cost|acquisition)( value| amount| cost)?$/, /invested|buy value|cost value|purchase value|total cost|amount invested/],
+  price: [/^(ltp|cmp|nav|close|last|current|market)( price| nav| rate)?$/, /^(previous |prev\.? )?clos(e|ing)( price)?$/, /^last traded price$/, /ltp|cmp|closing price|close price|market price|current price|last price|current nav|^nav/],
+  val: [/^(current|market|present|total|holding)( market)? ?value$/, /^value$/, /^(current|market) ?val(ue)?\b/, /current value|market value|present value|valuation/],
+  pl: [/^unreali[sz]ed p&l$/, /^p&l$/, /^(unrealized |unrealised )?(gain|p ?& ?l|profit)/],
+  lt: [/quantity long term/],
+  cur: [/^currency$/, /^ccy$/]
+};
+function hdrMap(row) {
+  const H = row.map(c => String(c ?? '').trim().toLowerCase().replace(/\s+/g, ' ').replace(/[()*:]/g, '').trim()), used = new Set(), m = {};
+  for (const k of ['isin', 'lt', 'qty', 'avg', 'inv', 'price', 'val', 'pl', 'cur', 'sym', 'name'])
+    for (const re of HCOL[k]) { const i = H.findIndex((h, j) => h && !used.has(j) && re.test(h) && !(k === 'qty' && /long term|pledg|discrep|t1|value|price/.test(h)) && !(k === 'avg' && /value|amount/.test(h)) && !(k === 'name' && /isin$/.test(h))); if (i >= 0) { m[k] = i; used.add(i); break; } }
+  m.qx = H.map((h, i) => /^quantity (discrepant|pledged)/.test(h) ? i : -1).filter(i => i >= 0);   // Zerodha's extra quantity buckets
+  m.score = (m.qty >= 0 ? 3 : 0) + (m.sym >= 0 || m.name >= 0 ? 3 : 0) + ['isin', 'avg', 'inv', 'price', 'val'].filter(k => m[k] >= 0).length;
+  return m;
+}
+const PLAT_RE = [['Zerodha US', /zerodha.?us|kite.?us/], ['Zerodha', /zerodha|console|kite|coin/], ['Aionion', /aionion/], ['Groww', /groww/], ['Upstox', /upstox/], ['INDmoney', /indmoney/], ['NSE IX', /nse.?ix|gift|nseix/], ['Vested', /vested/], ['Angel One', /angel/], ['ICICI Direct', /icici/], ['HDFC Sec', /hdfc.?sec/], ['Kotak', /kotak/], ['Dhan', /dhan/], ['CDSL', /cdsl|cas\b/], ['CAMS/KFin', /cams|kfin/]];
 function parseHoldings(sheets) {
   const out = [];
-  for (const [name, rows] of sheets) {
-    const hi = rows.findIndex(r => r.some(c => /^symbol$/i.test(String(c).trim())) && r.some(c => /quantity/i.test(c)));
+  for (const [name, rows, file] of sheets) {
+    let hi = -1, m = null;
+    rows.slice(0, 40).forEach((r, i) => { const x = hdrMap(r); if (x.qty >= 0 && (x.sym >= 0 || x.name >= 0) && (!m || x.score > m.score)) { m = x; hi = i; } });
     if (hi < 0) continue;
-    const H = rows[hi].map(c => String(c).trim().toLowerCase()), col = re => H.findIndex(h => re.test(h));
-    const cS = col(/^symbol$/), cI = col(/^isin$/), cAvg = col(/average/), cPrev = col(/previous clos|closing price|^ltp$|last price/), cPL = col(/^unrealized p&l$|^unrealised p&l$|^p&l$/);
-    const qCols = H.map((h, i) => /^quantity/.test(h) && !/long term/.test(h) ? i : -1).filter(i => i >= 0), cLT = col(/quantity long term/);
-    const sheetMF = /mutual/i.test(name);
+    const sheetMF = /mutual|\bmf\b|fund/i.test(name), sheetUS = /\bus\b|usa|international|global/i.test(name);
+    const fileUSD = rows.slice(0, hi + 1).flat().some(c => /\busd\b|\$/.test(String(c))) || /\(\$\)|usd/i.test(rows[hi].join(' '));
     for (const r of rows.slice(hi + 1)) {
-      const sym = String(r[cS] ?? '').trim(); if (!sym || /^total/i.test(sym)) continue;
-      const avg = numv(r[cAvg]), prev = cPrev >= 0 ? numv(r[cPrev]) : 0;
-      let qty = qCols.reduce((a, i) => a + numv(r[i]), 0);
-      if (cLT >= 0 && numv(r[cLT]) && cPL >= 0 && prev && prev !== avg) {   // is "long term" a separate bucket or part of available? Check against the P&L column.
-        const pl = numv(r[cPL]), withLT = qty + numv(r[cLT]);
-        if (Math.abs((prev - avg) * withLT - pl) < Math.abs((prev - avg) * qty - pl)) qty = withLT;
+      const get = k => m[k] >= 0 ? r[m[k]] : '';
+      const symRaw = String(get('sym') ?? '').trim(), nmRaw = String(get('name') ?? '').trim();
+      if (!symRaw && !nmRaw) continue;
+      if (/^(total|grand total|sub ?total|net)\b/i.test(symRaw || nmRaw)) continue;
+      let qty = numv(get('qty')) + m.qx.reduce((a, i) => a + numv(r[i]), 0);
+      const price0 = numv(get('price')), val = numv(get('val')), inv = numv(get('inv'));
+      let avg = numv(get('avg'));
+      if (m.lt >= 0 && numv(r[m.lt]) && m.pl >= 0 && price0 && price0 !== avg) {   // Zerodha: is "long term" separate from "available"? check against P&L
+        const pl = numv(get('pl')), w = qty + numv(r[m.lt]);
+        if (Math.abs((price0 - avg) * w - pl) < Math.abs((price0 - avg) * qty - pl)) qty = w;
       }
-      if (!qty) continue;
-      const isin = cI >= 0 ? String(r[cI] || '').trim() : '';
-      const mf = sheetMF || (/\s/.test(sym) && /fund|plan|growth|idcw/i.test(sym));
-      out.push({ id: uid(), kind: mf ? 'MF' : 'IN', sym, name: '', isin, qty: r2(qty * 1000) / 1000, avg: r2(avg * 10000) / 10000, prev, plat: 'Zerodha', src: 'zerodha' });
+      if (!(qty > 0)) continue;
+      if (!avg && inv) avg = inv / qty;
+      const prev = price0 || (val ? val / qty : 0);
+      const isin = String(get('isin') || '').trim().toUpperCase();
+      const cur = String(get('cur') || '').toUpperCase();
+      const label = symRaw || nmRaw, txt = (symRaw + ' ' + nmRaw);
+      const isMF = sheetMF || /\b(fund|scheme|plan)\b|growth|idcw|dividend option/i.test(nmRaw || (/\s/.test(symRaw) ? symRaw : ''));
+      const isUS = !isMF && (sheetUS || cur === 'USD' || /^US[A-Z0-9]{10}$/.test(isin) || (fileUSD && !/^IN[A-Z0-9]{10}$/.test(isin)));
+      const sym = isMF ? (nmRaw || symRaw) : (symRaw || nmRaw);
+      out.push({ id: uid(), kind: isMF ? 'MF' : isUS ? 'US' : 'IN', sym: isMF ? sym : sym.toUpperCase(), name: !isMF && symRaw && nmRaw && nmRaw !== symRaw ? nmRaw : '', isin: /^[A-Z]{2}[A-Z0-9]{10}$/.test(isin) ? isin : '', qty: r2(qty * 1000) / 1000, avg: r2(avg * 10000) / 10000, prev: r2(prev * 10000) / 10000, file, txt });
     }
   }
   return out;
@@ -1597,18 +1630,31 @@ function parseHoldings(sheets) {
 async function importHoldings(files) {
   try {
     const X = await loadXLSX(); const sheets = [];
-    for (const f of files) { const wb = X.read(await f.arrayBuffer(), { type: 'array' }); wb.SheetNames.forEach(n => sheets.push([n, X.utils.sheet_to_json(wb.Sheets[n], { header: 1, raw: true, defval: '' })])); }
+    for (const f of files) { const wb = X.read(await f.arrayBuffer(), { type: 'array' }); wb.SheetNames.forEach(n => sheets.push([n, X.utils.sheet_to_json(wb.Sheets[n], { header: 1, raw: true, defval: '' }), f.name])); }
     const list = parseHoldings(sheets);
-    if (!list.length) return toast('No holdings found — use Zerodha Console → Portfolio → Holdings → Download (Excel or CSV)', 6000);
-    const P = PF(), keep = P.holdings.filter(h => h.src !== 'zerodha'), cost = list.reduce((a, h) => a + h.qty * h.avg, 0);
-    const c = k => list.filter(h => h.kind === k).length;
-    openSheet(`<h3>Import Zerodha holdings</h3><p class="muted" style="margin-top:2px">${c('IN')} stocks/ETFs · ${c('MF')} mutual funds · cost ${money(cost)}</p>
-      <div style="max-height:40vh;overflow:auto">${list.map(h => `<div class="settle"><span>${esc(h.sym)} <span class="muted">· ${h.qty} @ ${money(h.avg)}</span></span><b>${money(h.qty * h.avg)}</b></div>`).join('')}</div>
-      <p class="muted">This replaces your earlier Zerodha import. ${keep.length ? `Your ${keep.length} hand-added holding${keep.length > 1 ? 's' : ''} stay.` : ''}</p>
+    if (!list.length) return toast('No holdings found — the file needs columns like Symbol/Name and Quantity (an Excel or CSV holdings export from your broker)', 7000);
+    const fn = files.map(f => f.name).join(' ').toLowerCase(), zLike = sheets.some(([, rows]) => rows.slice(0, 40).some(r => r.some(c => /^quantity discrepant$/i.test(String(c).trim()))));
+    const guess = (PLAT_RE.find(([, re]) => re.test(fn)) || [zLike ? 'Zerodha' : 'Imported'])[0];
+    const KN = { IN: '🇮🇳 India', MF: '🧺 Fund', US: '🇺🇸 US' };
+    const rowsHTML = () => list.map((h, i) => `<label class="pvrow" style="display:flex;gap:8px;align-items:center;padding:6px 0;border-bottom:1px solid var(--line)"><input type="checkbox" data-hi="${i}" ${h.off ? '' : 'checked'} style="width:auto;margin:0"><span style="flex:1;min-width:0"><b>${esc(h.sym)}</b>${h.name ? ` <span class="muted">${esc(h.name)}</span>` : ''}<br><span class="muted">${h.qty} @ ${h.kind === 'US' ? '$' + h.avg : money(h.avg)}</span></span><select data-hk="${i}" style="width:auto;margin:0;padding:4px;font-size:12px">${Object.entries(KN).map(([k, n]) => `<option value="${k}" ${h.kind === k ? 'selected' : ''}>${n}</option>`).join('')}</select></label>`).join('');
+    openSheet(`<h3>Import holdings</h3><p class="muted" style="margin-top:2px">Found ${list.length} in ${esc(files.map(f => f.name).join(', '))}. Untick anything that isn't a holding; fix the type if needed.</p>
+      <label class="muted">Platform<input id="impPlat" list="hPlats2" value="${esc(guess)}"><datalist id="hPlats2">${[...new Set([...PLATS, ...PLAT_RE.map(x => x[0])])].map(p => `<option value="${p}">`).join('')}</datalist></label>
+      <div style="max-height:42vh;overflow:auto;margin-top:8px" id="impRows">${rowsHTML()}</div>
+      <p class="muted" id="impNote"></p>
       <div class="btns"><button data-h="no">Cancel</button><button data-h="ok" style="background:var(--accent);color:#fff;border:0">Import</button></div>`, ev => {
-      const b = ev.target.closest('[data-h]'); if (!b) return; closeSheet(); if (b.dataset.h !== 'ok') return;
-      savePF({ ...P, holdings: [...list, ...keep], imported: today() }); toast(`Imported ${list.length} holdings`); refreshPrices(false);
+      const b = ev.target.closest('[data-h]'); if (!b) return; if (b.dataset.h !== 'ok') return closeSheet();
+      const plat = $('#impPlat').value.trim() || 'Imported', P = PF();
+      const pick = list.filter(h => !h.off).map(({ off, file, txt, ...h }) => ({ ...h, plat, src: 'import', ...(h.kind === 'US' && fx() ? { avgFx: fx() } : {}) }));
+      if (!pick.length) return toast('Nothing selected');
+      const same = x => x.src !== 'manual' && (x.plat || 'Zerodha').toLowerCase() === plat.toLowerCase();
+      const keep = P.holdings.filter(x => !same(x));
+      closeSheet(); savePF({ ...P, holdings: [...pick, ...keep], imported: today() });
+      toast(`Imported ${pick.length} holdings from ${plat}`); refreshPrices(false);
     });
+    const note = () => { const plat = ($('#impPlat').value || '').trim().toLowerCase(), n = PF().holdings.filter(x => x.src !== 'manual' && (x.plat || '').toLowerCase() === plat).length;
+      $('#impNote').textContent = n ? `This replaces your ${n} earlier imported holding${n > 1 ? 's' : ''} from ${$('#impPlat').value.trim()}. Everything else stays.` : 'Your other holdings stay as they are.'; };
+    $('#impPlat').oninput = note; note();
+    $('#impRows').onchange = e => { const t = e.target; if (t.dataset.hi !== undefined) list[+t.dataset.hi].off = !t.checked; if (t.dataset.hk !== undefined) list[+t.dataset.hk].kind = t.value; };
   } catch (e) { console.error(e); toast('Could not read that file: ' + e.message, 5000); }
 }
 
@@ -1653,7 +1699,7 @@ function renderPort() {
   const pl = tot - cost, pct = Math.min(100, tot / goal * 100), stale = V.filter(x => x.h.kind !== 'FIX' && !x.live).length;
   const upd = PX._t ? new Date(PX._t) : null, updTxt = upd ? (today() === upd.toISOString().slice(0, 10) ? 'today ' : niceDate(upd.toISOString().slice(0, 10)) + ' ') + upd.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'never';
   const hist = P.hist || {}, hk = Object.keys(hist).sort(), mAgo = hk.filter(d => d <= new Date(Date.now() - 30 * 864e5).toISOString().slice(0, 10)).pop();
-  $('#portTop').innerHTML = !H.length ? `<div class="label" style="margin-top:0">Your portfolio</div><p class="muted">Import your Zerodha holdings (Console → Portfolio → Holdings → Download, Excel or CSV — do the Mutual Funds tab too if it's a separate file), then add US and other holdings by hand.</p>`
+  $('#portTop').innerHTML = !H.length ? `<div class="label" style="margin-top:0">Your portfolio</div><p class="muted">Tap ⬆ Import and pick a holdings file (Excel or CSV) from any broker — Zerodha Console, Aionion, Groww, Upstox, INDmoney, NSE IX and others. Import each platform's file; then add anything else by hand.</p>`
     : `<div class="muted">Portfolio value</div><div class="big">${money(Math.round(tot))}</div>
     <div class="muted">${day ? `<span class="${day >= 0 ? 'down' : 'up'}">${day >= 0 ? '▲' : '▼'} ${money(Math.abs(Math.round(day)))} today</span> · ` : ''}${cost ? `<span class="${pl >= 0 ? 'down' : 'up'}">${pl >= 0 ? '+' : '−'}${money(Math.abs(Math.round(pl)))} (${(pl / cost * 100).toFixed(1)}%)</span> on ${money(Math.round(cost))} invested` : ''}</div>
     <div class="label">Goal ${money(goal)} <button class="link small" id="portGoal" style="padding:0 4px">✎</button></div>
@@ -1667,7 +1713,7 @@ function renderPort() {
   const groups = Object.keys(KINDS).filter(k => V.some(x => x.h.kind === k));
   $('#portList').innerHTML = groups.map(k => `<div class="day"><span>${KINDS[k][0]}</span><span>${money(Math.round(byK[k] || 0))}</span></div><div class="card" style="padding:2px 14px">${V.filter(x => x.h.kind === k).sort((a, b) => b.val - a.val).map(x => {
     const h = x.h, g = x.cost ? (x.val - x.cost) / x.cost * 100 : 0, q = PX[pkey(h)] || {};
-    const sub = h.kind === 'FIX' ? esc(h.plat) : `${+h.qty.toFixed(3)} × ${h.kind === 'US' ? '$' + (x.price || 0).toFixed(2) : money(x.price || 0)} · ${esc(h.plat)}${x.live ? '' : ' · <span class="up">no live price</span>'}${h.kind === 'MF' && q.n ? ' · ' + esc(q.n) : ''}`;
+    const sub = h.kind === 'FIX' ? esc(h.plat) : `${+h.qty.toFixed(3)} × ${h.kind === 'US' ? '$' + (x.price || 0).toFixed(2) : money(x.price || 0)} · ${esc(h.plat)}${x.live ? '' : ' · <span class="up">no live price' + (h.kind === 'IN' && /\s/.test(h.sym) ? ' — tap to set the NSE symbol' : '') + '</span>'}${h.kind === 'MF' && q.n ? ' · ' + esc(q.n) : ''}`;
     return `<div class="item" data-hid="${h.id}"><div class="ic" style="background:${KINDS[k][1]}22">${k === 'US' ? '🇺🇸' : k === 'MF' ? '🧺' : k === 'FIX' ? '🏦' : '📈'}</div><div class="mid"><div class="t">${esc(h.sym)}</div><div class="s">${sub}</div></div><div class="a" style="text-align:right">${money(Math.round(x.val))}${h.kind !== 'FIX' && x.cost ? `<div class="s ${g >= 0 ? 'down' : 'up'}" style="font-weight:400">${g >= 0 ? '+' : ''}${g.toFixed(1)}%</div>` : ''}</div></div>`; }).join('')}</div>`).join('');
   $('#portRefresh').disabled = pBusy;
   $('#portClear').hidden = !H.length;
