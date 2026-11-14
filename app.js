@@ -1465,7 +1465,7 @@ const PLATS = ['Zerodha', 'Zerodha US', 'NSE IX', 'Aionion', 'Bank', 'Other'];
 let PX = (() => { try { return JSON.parse(localStorage.getItem(PKEY)) || {}; } catch (e) { return {}; } })();
 const savePX = () => { try { localStorage.setItem(PKEY, JSON.stringify(PX)); } catch (e) {} };
 let pBusy = false, pTimer = 0, pTry = 0;
-let pAcct = '', pGroup = (() => { try { return localStorage.getItem('trickle_pgroup') || 'acct'; } catch (e) { return 'acct'; } })();
+let impPreset = '', pAcct = '', pGroup = (() => { try { return localStorage.getItem('trickle_pgroup') || 'acct'; } catch (e) { return 'acct'; } })();
 const PF = () => S.portfolio || { holdings: [], goal: 1e7, hist: {} };
 const numv = v => typeof v === 'number' ? v : parseFloat(String(v ?? '').replace(/[,₹$\s]/g, '')) || 0;
 const pkey = h => h.kind + ':' + (h.kind === 'MF' ? (h.isin || h.sym) : h.sym).toUpperCase();
@@ -1632,13 +1632,13 @@ async function importHoldings(files) {
   try {
     const X = await loadXLSX(); const sheets = [];
     for (const f of files) { const wb = X.read(await f.arrayBuffer(), { type: 'array' }); wb.SheetNames.forEach(n => sheets.push([n, X.utils.sheet_to_json(wb.Sheets[n], { header: 1, raw: true, defval: '' }), f.name])); }
-    const list = parseHoldings(sheets);
+    const list = parseHoldings(sheets), preset = impPreset; impPreset = '';
     if (!list.length) return toast('No holdings found — the file needs columns like Symbol/Name and Quantity (an Excel or CSV holdings export from your broker)', 7000);
     const fn = files.map(f => f.name).join(' ').toLowerCase(), zLike = sheets.some(([, rows]) => rows.slice(0, 40).some(r => r.some(c => /^quantity discrepant$/i.test(String(c).trim()))));
-    const guess = (PLAT_RE.find(([, re]) => re.test(fn)) || [zLike ? 'Zerodha' : 'Imported'])[0];
+    const guess = impPreset || (PLAT_RE.find(([, re]) => re.test(fn)) || [zLike ? 'Zerodha' : 'Imported'])[0];
     const KN = { IN: '🇮🇳 India', MF: '🧺 Fund', US: '🇺🇸 US' };
     const rowsHTML = () => list.map((h, i) => `<label class="pvrow" style="display:flex;gap:8px;align-items:center;padding:6px 0;border-bottom:1px solid var(--line)"><input type="checkbox" data-hi="${i}" ${h.off ? '' : 'checked'} style="width:auto;margin:0"><span style="flex:1;min-width:0"><b>${esc(h.sym)}</b>${h.name ? ` <span class="muted">${esc(h.name)}</span>` : ''}<br><span class="muted">${h.qty} @ ${h.kind === 'US' ? '$' + h.avg : money(h.avg)}</span></span><select data-hk="${i}" style="width:auto;margin:0;padding:4px;font-size:12px">${Object.entries(KN).map(([k, n]) => `<option value="${k}" ${h.kind === k ? 'selected' : ''}>${n}</option>`).join('')}</select></label>`).join('');
-    openSheet(`<h3>Import holdings</h3><p class="muted" style="margin-top:2px">Found ${list.length} in ${esc(files.map(f => f.name).join(', '))}. Untick anything that isn't a holding; fix the type if needed.</p>
+    openSheet(`<h3>Import holdings</h3><p class="muted" style="margin-top:2px">${preset ? `Updating <b>${esc(preset)}</b>. ` : ''}Found ${list.length} in ${esc(files.map(f => f.name).join(', '))}. Untick anything that isn't a holding; fix the type if needed.</p>
       <label class="muted">Account (use a different name for each demat, e.g. “Zerodha – Guru”)<input id="impPlat" list="hPlats2" value="${esc(guess)}"><datalist id="hPlats2">${[...new Set([...PLATS, ...PLAT_RE.map(x => x[0])])].map(p => `<option value="${p}">`).join('')}</datalist></label>
       <div style="max-height:42vh;overflow:auto;margin-top:8px" id="impRows">${rowsHTML()}</div>
       <p class="muted" id="impNote"></p>
@@ -1717,7 +1717,7 @@ function renderPort() {
   const accts = Object.keys(byA).sort((a, b) => byA[b].val - byA[a].val);
   if (pAcct && !byA[pAcct]) pAcct = '';
   $('#portAccts').innerHTML = accts.length ? `<div class="row" style="align-items:center"><div class="label" style="margin:0">Accounts · ${accts.length}</div><span class="muted" style="text-align:right">tap to filter</span></div>${accts.map(a => { const o = byA[a], g = o.cost - o.fix ? (o.val - o.cost) / (o.cost - o.fix) * 100 : 0;
-      return `<div class="item${pAcct === a ? ' picked' : ''}" data-acct="${esc(a)}" style="${pAcct && pAcct !== a ? 'opacity:.5' : ''}"><div class="mid"><div class="t">${esc(a)} <button class="link small" data-ren="${esc(a)}" style="padding:0 4px">✎</button></div><div class="s">${o.n} holding${o.n > 1 ? 's' : ''} · ${tot ? Math.round(o.val / tot * 100) : 0}% of total${o.day ? ` · <span class="${o.day >= 0 ? 'down' : 'up'}">${o.day >= 0 ? '▲' : '▼'} ${money(Math.abs(Math.round(o.day)))} today</span>` : ''}</div></div><div class="a" style="text-align:right">${money(Math.round(o.val))}${o.cost - o.fix ? `<div class="s ${g >= 0 ? 'down' : 'up'}" style="font-weight:400">${g >= 0 ? '+' : ''}${g.toFixed(1)}%</div>` : ''}</div></div>`; }).join('')}` : '';
+      return `<div class="item${pAcct === a ? ' picked' : ''}" data-acct="${esc(a)}" style="${pAcct && pAcct !== a ? 'opacity:.5' : ''}"><div class="mid"><div class="t">${esc(a)} <button class="link small" data-ren="${esc(a)}" style="padding:0 4px" title="Rename">✎</button><button class="link small" data-upd="${esc(a)}" style="padding:0 4px" title="Update from a new file">⬆</button><button class="link small" data-adel="${esc(a)}" style="padding:0 4px;color:var(--up,#e53935)" title="Delete account">🗑</button></div><div class="s">${o.n} holding${o.n > 1 ? 's' : ''} · ${tot ? Math.round(o.val / tot * 100) : 0}% of total${o.day ? ` · <span class="${o.day >= 0 ? 'down' : 'up'}">${o.day >= 0 ? '▲' : '▼'} ${money(Math.abs(Math.round(o.day)))} today</span>` : ''}</div></div><div class="a" style="text-align:right">${money(Math.round(o.val))}${o.cost - o.fix ? `<div class="s ${g >= 0 ? 'down' : 'up'}" style="font-weight:400">${g >= 0 ? '+' : ''}${g.toFixed(1)}%</div>` : ''}</div></div>`; }).join('')}` : '';
   $('#portAccts').hidden = !accts.length;
   $$('#portGroup button').forEach(b => b.classList.toggle('on', b.dataset.g === pGroup));
   $('#portGroup').hidden = !H.length;
@@ -1739,7 +1739,7 @@ $('#portAdd').onclick = () => holdingForm(null);
 $('#portClear').onclick = () => { const P = PF(), n = P.holdings.length; if (!n) return toast('No holdings to clear');
   if (!confirm(`Delete all ${n} holdings? Your goal and value history stay. You can import again after.`)) return;
   savePF({ ...P, holdings: [] }); toast('Holdings cleared'); };
-$('#portImport').onclick = () => $('#holdFile').click();
+$('#portImport').onclick = () => { impPreset = ''; $('#holdFile').click(); };
 $('#holdFile').onchange = e => { const f = [...e.target.files]; e.target.value = ''; if (f.length) importHoldings(f); };
 $('#portList').onclick = e => { if (e.target.closest('#portAll')) { pAcct = ''; return schedule(); } const r = e.target.closest('[data-hid]'); if (r) holdingForm(PF().holdings.find(h => h.id === r.dataset.hid)); };
 $('#portGroup').onclick = e => { const b = e.target.closest('[data-g]'); if (!b) return; pGroup = b.dataset.g; try { localStorage.setItem('trickle_pgroup', pGroup); } catch (x) {} schedule(); };
@@ -1747,6 +1747,12 @@ $('#portAccts').onclick = e => {
   const ren = e.target.closest('[data-ren]');
   if (ren) { const old = ren.dataset.ren, nn = (prompt('Account name (e.g. "Zerodha – Guru")', old) || '').trim(); if (!nn || nn === old) return;
     const P = PF(); savePF({ ...P, holdings: P.holdings.map(h => (h.plat || 'Other').trim() === old ? { ...h, plat: nn } : h) }); if (pAcct === old) pAcct = nn; return toast('Renamed to ' + nn); }
+  const upd = e.target.closest('[data-upd]');
+  if (upd) { impPreset = upd.dataset.upd; toast('Pick the new holdings file for ' + impPreset); return $('#holdFile').click(); }
+  const del = e.target.closest('[data-adel]');
+  if (del) { const a = del.dataset.adel, P = PF(), of = h => ((h.plat || 'Other').trim() || 'Other') === a, n = P.holdings.filter(of).length;
+    if (!confirm(`Delete the account "${a}" and its ${n} holding${n > 1 ? 's' : ''}? Your other accounts, goal and value history stay.`)) return;
+    savePF({ ...P, holdings: P.holdings.filter(h => !of(h)) }); if (pAcct === a) pAcct = ''; snapHist(); return toast(`Deleted ${a}`); }
   const r = e.target.closest('[data-acct]'); if (!r) return; pAcct = pAcct === r.dataset.acct ? '' : r.dataset.acct; schedule();
   if (pAcct) setTimeout(() => $('#portList').scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
 };
