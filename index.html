@@ -147,6 +147,7 @@ body.typing .fab,body.selecting .fab{display:none}
 .step{display:inline-flex;align-items:center;border:1px solid var(--line);border-radius:10px;flex:none}.step button{border:0;background:none;padding:6px 11px;font-size:16px}.step b{min-width:16px;text-align:center}
 .splt{color:var(--accent)}
 body.selecting main{padding-bottom:180px}
+[hidden]{display:none!important}
 .banner{background:var(--accent-soft);color:var(--text);border-radius:12px;padding:12px 14px;margin-bottom:12px;font-size:14px}
 .gbtn{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;margin-top:10px;font-weight:600}
 </style>
@@ -154,6 +155,7 @@ body.selecting main{padding-bottom:180px}
 <body>
 <header><h1>Trick<span>le</span></h1><div id="sync"></div></header>
 <main>
+<div class="banner" id="driveNag" hidden><span id="driveNagText"></span> <button class="small" id="driveNagBtn">Update now</button></div>
 
 <section id="v-add" class="on">
   <div id="nudges"></div>
@@ -241,6 +243,12 @@ body.selecting main{padding-bottom:180px}
     <p class="muted" style="margin-top:0">If a note or bank narration contains the word, it goes to that category. Rules are also learned when you change a category.</p>
     <div id="ruleList"></div>
     <div class="row" style="margin-top:8px"><input id="ruleKey" placeholder="e.g. murugan" style="margin:0"><select id="ruleCat" style="margin:0"></select><button class="small" id="addRule" style="flex:0 0 auto">Add</button></div>
+  </div>
+  <div class="card">
+    <div class="label" style="margin-top:0">Google Drive auto-save</div>
+    <p class="muted" style="margin-top:0">Keeps <b>trickle-latest.json</b> and <b>trickle-latest.csv</b> in a “Trickle” folder in your own Google Drive, updated automatically while the app is open. Claude can read them for your weekly review.</p>
+    <p class="muted" id="driveStatus" style="margin:0 0 10px">Off</p>
+    <div class="row"><button id="driveBtn" style="margin:0">Connect Google Drive</button><button class="small" id="driveOff" style="flex:0 0 auto;margin:0" hidden>Turn off</button></div>
   </div>
   <div class="card">
     <div class="label" style="margin-top:0">Backup file</div>

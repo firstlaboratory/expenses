@@ -371,6 +371,7 @@ function render() {
   $$('.mlabel').forEach(e => e.textContent = pmode === 'year' ? month.slice(0, 4) : monthLabel(month));
   $$('.pseg button').forEach(b => b.classList.toggle('on', b.dataset.p === pmode));
   renderSelBar();
+  try { renderDrive(); driveAuto(); } catch (e) {}
   ({ add: renderAdd, list: renderList, trips: renderTrips, stats: renderStats, settings: renderSettings })[view]();
 }
 window.addEventListener('online', schedule); window.addEventListener('offline', schedule);
@@ -1351,13 +1352,96 @@ async function deliver(name, text, type) {
   const a = document.createElement('a'); a.href = URL.createObjectURL(file); a.download = name; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
 }
 const csvCell = v => { v = String(v ?? ''); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
+function csvOf(list) {
+  const rows = [['Date', 'Type', 'Amount', 'Category', 'Mode', 'PaidBy', 'Note', 'Friend', 'Split', 'Trip', 'Id'], ...[...list].sort((a, b) => a.date.localeCompare(b.date)).map(e => [e.date, isInc(e) ? 'Income' : 'Expense', e.amount, e.cat, e.mode, e.person, e.note, e.who || '', hasSplit(e) ? e.split.map(x => x.who + '=' + x.amount).join('; ') : '', e.trip ? (trip(e.trip) || {}).name || '' : '', e.id])];
+  return '﻿' + rows.map(r => r.map(csvCell).join(',')).join('\r\n');
+}
 function exportCSV(list, base) {
   if (!list.length) return toast('Nothing to download yet');
-  const rows = [['Date', 'Type', 'Amount', 'Category', 'Mode', 'PaidBy', 'Note', 'Friend', 'Split', 'Trip', 'Id'], ...[...list].sort((a, b) => a.date.localeCompare(b.date)).map(e => [e.date, isInc(e) ? 'Income' : 'Expense', e.amount, e.cat, e.mode, e.person, e.note, e.who || '', hasSplit(e) ? e.split.map(x => x.who + '=' + x.amount).join('; ') : '', e.trip ? (trip(e.trip) || {}).name || '' : '', e.id])];
-  deliver(`${base}-${today()}.csv`, '﻿' + rows.map(r => r.map(csvCell).join(',')).join('\r\n'), 'text/csv');
+  deliver(`${base}-${today()}.csv`, csvOf(list), 'text/csv');
 }
-$('#dlCsv').onclick = () => exportCSV(S.expenses.concat(...Object.entries(TE).map(([id, l]) => l.map(e => ({ ...e, trip: id })))), 'trickle');
-$('#expBackup').onclick = () => deliver(`trickle-backup-${today()}.json`, JSON.stringify({ app: 'trickle', v: 3, ...metaOf(S), expenses: S.expenses, trips: S.trips.map(t => ({ id: t.id, name: t.name, start: t.start, end: t.end, budget: t.budget, notes: t.notes || '', members: t.members })), tripExp: TE }), 'application/json');
+const allForCsv = () => S.expenses.concat(...Object.entries(TE).map(([id, l]) => l.map(e => ({ ...e, trip: id }))));
+const backupJSON = () => JSON.stringify({ app: 'trickle', v: 3, ...metaOf(S), expenses: S.expenses, trips: S.trips.map(t => ({ id: t.id, name: t.name, start: t.start, end: t.end, budget: t.budget, notes: t.notes || '', members: t.members })), tripExp: TE });
+$('#dlCsv').onclick = () => exportCSV(allForCsv(), 'trickle');
+$('#expBackup').onclick = () => deliver(`trickle-backup-${today()}.json`, backupJSON(), 'application/json');
+
+// ================= Google Drive auto-save =================
+// Keeps "Trickle/trickle-latest.json" and "Trickle/trickle-latest.csv" in the signed-in user's own Drive,
+// updated automatically while the app is open. Uses the drive.file scope: the app can only see files it created.
+// Google gives a browser app a 1-hour access token, so after that one tap ("Update now") refreshes it.
+const DKEY = 'trickle_drive', DAPI = 'https://www.googleapis.com/drive/v3/files', DUP = 'https://www.googleapis.com/upload/drive/v3/files';
+let DR = (() => { try { return JSON.parse(localStorage.getItem(DKEY)) || {}; } catch (e) { return {}; } })();
+const saveDR = () => { try { localStorage.setItem(DKEY, JSON.stringify(DR)); } catch (e) {} };
+const driveTokOk = () => !!(DR.tok && DR.exp > Date.now() + 60000);
+let dBusy = false, dTimer = 0;
+async function driveConnect() {
+  if (!fb || !user) return toast('Sign in with Google first, then connect Drive', 4000);
+  const p = new fb.A.GoogleAuthProvider();
+  p.addScope('https://www.googleapis.com/auth/drive.file');
+  if (user.email) p.setCustomParameters({ login_hint: user.email });
+  try {
+    const isG = user.providerData.some(x => x.providerId === 'google.com');
+    const r = isG ? await fb.A.reauthenticateWithPopup(user, p) : await fb.A.linkWithPopup(user, p);
+    const c = fb.A.GoogleAuthProvider.credentialFromResult(r);
+    if (!c || !c.accessToken) throw new Error('Google did not grant Drive access');
+    Object.assign(DR, { on: true, tok: c.accessToken, exp: Date.now() + 55 * 60000 }); saveDR();
+    await driveSave(true);
+  } catch (e) {
+    if (!['auth/popup-closed-by-user', 'auth/cancelled-popup-request'].includes(e.code))
+      toast(e.code === 'auth/popup-blocked' ? 'Allow pop-ups for this site, then tap again' : e.code === 'auth/user-mismatch' ? 'Pick the same Google account you signed in with' : 'Drive: ' + (e.message || e.code), 5000);
+  }
+  schedule();
+}
+async function dfetch(url, opt = {}) {
+  const r = await fetch(url, { ...opt, headers: { Authorization: 'Bearer ' + DR.tok, ...(opt.headers || {}) } });
+  if (r.status === 401) { DR.tok = null; saveDR(); throw Object.assign(new Error('Drive connection expired'), { expired: true }); }
+  if (!r.ok) throw Object.assign(new Error('Drive error ' + r.status + ': ' + (await r.text()).slice(0, 160)), { status: r.status });
+  return r.json();
+}
+async function driveFolder() {
+  if (DR.folder) { try { const f = await dfetch(`${DAPI}/${DR.folder}?fields=id,trashed`); if (!f.trashed) return DR.folder; } catch (e) { if (e.expired) throw e; } }
+  const f = await dfetch(`${DAPI}?fields=id`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'Trickle', mimeType: 'application/vnd.google-apps.folder' }) });
+  DR.folder = f.id; saveDR(); return f.id;
+}
+async function driveUpsert(key, name, mime, text) {
+  if (DR[key]) {
+    try { const f = await dfetch(`${DUP}/${DR[key]}?uploadType=media&fields=id,trashed`, { method: 'PATCH', headers: { 'Content-Type': mime }, body: text }); if (!f.trashed) return; }
+    catch (e) { if (e.expired || e.status !== 404) throw e; }
+  }
+  const b = 'trickle' + Date.now(), meta = { name, mimeType: mime, parents: [await driveFolder()] };
+  const body = `--${b}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(meta)}\r\n--${b}\r\nContent-Type: ${mime}\r\n\r\n${text}\r\n--${b}--`;
+  const f = await dfetch(`${DUP}?uploadType=multipart&fields=id`, { method: 'POST', headers: { 'Content-Type': 'multipart/related; boundary=' + b }, body });
+  DR[key] = f.id; saveDR();
+}
+async function driveSave(manual) {
+  if (!DR.on || dBusy || !user) return;
+  if (!driveTokOk()) { if (manual) toast('Tap Connect Google Drive again'); schedule(); return; }
+  if (!S.expenses.length) { if (manual) toast('Waiting for your data to load — try again in a moment'); return; }  // never overwrite Drive with an empty load
+  const json = backupJSON(), sig = hash(json);
+  if (!manual && sig === DR.sig) return;
+  dBusy = true; schedule();
+  try {
+    await driveUpsert('json', 'trickle-latest.json', 'application/json', json);
+    await driveUpsert('csv', 'trickle-latest.csv', 'text/csv', csvOf(allForCsv()));
+    Object.assign(DR, { last: Date.now(), sig }); saveDR();
+    if (manual) toast('Saved to Google Drive ✓');
+  } catch (e) { toast(e.expired ? 'Drive connection expired — tap Update now' : 'Drive save failed: ' + e.message, 5000); }
+  finally { dBusy = false; schedule(); }
+}
+function driveAuto() { if (DR.on && driveTokOk() && !dBusy) { clearTimeout(dTimer); dTimer = setTimeout(() => driveSave(false), 15000); } }
+function renderDrive() {
+  const ago = DR.last ? Math.floor((Date.now() - DR.last) / 864e5) : null;
+  const when = DR.last ? (ago < 1 ? 'today ' + new Date(DR.last).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ago === 1 ? 'yesterday' : ago + ' days ago') : 'not yet';
+  $('#driveStatus').textContent = !DR.on ? 'Off' : dBusy ? 'Saving to Drive…' : `On · last saved ${when}` + (driveTokOk() ? ' · auto-saving while open' : ' · tap Update to refresh');
+  $('#driveBtn').textContent = !DR.on ? 'Connect Google Drive' : 'Save to Drive now';
+  $('#driveOff').hidden = !DR.on;
+  const nag = DR.on && user && !driveTokOk() && !dBusy && (!DR.last || Date.now() - DR.last > 864e5);
+  $('#driveNag').hidden = !nag;
+  if (nag) $('#driveNagText').textContent = `☁ Drive backup last saved ${when}.`;
+}
+$('#driveBtn').onclick = () => driveTokOk() ? driveSave(true) : driveConnect();
+$('#driveNagBtn').onclick = driveConnect;
+$('#driveOff').onclick = () => { if (confirm('Stop auto-saving to Google Drive? Files already in Drive stay there.')) { DR = { folder: DR.folder, json: DR.json, csv: DR.csv }; saveDR(); schedule(); } };
 
 // ================= import =================
 let fileTarget = '';
