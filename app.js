@@ -130,6 +130,7 @@ function normalize(b) {
   out.stmts = (Array.isArray(b.stmts) ? b.stmts : []).filter(x => x && /^\d{4}-\d{2}-\d{2}$/.test(x.from) && /^\d{4}-\d{2}-\d{2}$/.test(x.to)).map(x => ({ from: x.from, to: x.to, ...(isFinite(+x.opening) && x.opening !== null && x.opening !== '' ? { opening: +x.opening, closing: +x.closing } : {}), n: +x.n || 0 }));
   out.dismissed = (Array.isArray(b.dismissed) ? b.dismissed : []).map(String);
   out.tax = b.tax && typeof b.tax === 'object' ? b.tax : {};
+  out.portfolio = b.portfolio && typeof b.portfolio === 'object' && Array.isArray(b.portfolio.holdings) ? b.portfolio : null;
   out.rules = (Array.isArray(b.rules) ? b.rules : []).filter(r => r && r.k).map(r => ({ k: String(r.k), cat: cn(r.cat), ...(r.who ? { who: String(r.who) } : {}) }));
   const splitOf_ = e => Array.isArray(e.split) && e.split.length ? { split: e.split.filter(x => x && x.who && +x.amount > 0).map(x => ({ who: String(x.who), amount: r2(+x.amount), ...(+x.shares ? { shares: +x.shares } : {}) })), splitBy: e.splitBy === 'amount' ? 'amount' : 'shares', meShares: +e.meShares >= 0 ? +e.meShares : 1 } : {};
   const splitOf = splitOf_;
@@ -146,7 +147,7 @@ function normalize(b) {
   return out;
 }
 function loadLocal() { try { const raw = localStorage.getItem(LKEY); return raw ? normalize(JSON.parse(raw)) : null; } catch (e) { return null; } }
-const metaOf = o => ({ categories: o.categories, incCats: o.incCats, people: o.people, rules: o.rules, lastPerson: o.lastPerson, stmts: o.stmts || [], dismissed: o.dismissed || [], tax: o.tax || {}, houseAdded: true, name: o.name || '', notes: o.notes || '' });
+const metaOf = o => ({ categories: o.categories, incCats: o.incCats, people: o.people, rules: o.rules, lastPerson: o.lastPerson, stmts: o.stmts || [], dismissed: o.dismissed || [], tax: o.tax || {}, houseAdded: true, name: o.name || '', notes: o.notes || '', portfolio: o.portfolio || null });
 function saveLocal() { if (cloud) return; try { localStorage.setItem(LKEY, JSON.stringify({ v: 3, ...metaOf(S), expenses: S.expenses, trips: S.trips, tripExp: TE })); } catch (e) { toast('Could not save — storage may be full'); } }
 function useLocal() { const L = loadLocal() || normalize(null); TE = L.tripExp; delete L.tripExp; S = L; }
 
@@ -372,7 +373,7 @@ function render() {
   $$('.pseg button').forEach(b => b.classList.toggle('on', b.dataset.p === pmode));
   renderSelBar();
   try { renderDrive(); driveAuto(); } catch (e) {}
-  ({ add: renderAdd, list: renderList, trips: renderTrips, stats: renderStats, settings: renderSettings })[view]();
+  ({ add: renderAdd, list: renderList, trips: renderTrips, stats: renderStats, port: renderPort, settings: renderSettings })[view]();
 }
 window.addEventListener('online', schedule); window.addEventListener('offline', schedule);
 
@@ -1374,8 +1375,9 @@ let DR = (() => { try { return JSON.parse(localStorage.getItem(DKEY)) || {}; } c
 const saveDR = () => { try { localStorage.setItem(DKEY, JSON.stringify(DR)); } catch (e) {} };
 const driveTokOk = () => !!(DR.tok && DR.exp > Date.now() + 60000);
 let dBusy = false, dTimer = 0;
-async function driveConnect() {
-  if (!fb || !user) return toast('Sign in with Google first, then connect Drive', 4000);
+// One Google pop-up gives a 1-hour token for Drive files Trickle created (also used for live prices via Google Sheets).
+async function googleToken() {
+  if (!fb || !user) { toast('Sign in with Google first', 4000); return false; }
   const p = new fb.A.GoogleAuthProvider();
   p.addScope('https://www.googleapis.com/auth/drive.file');
   if (user.email) p.setCustomParameters({ login_hint: user.email });
@@ -1384,13 +1386,20 @@ async function driveConnect() {
     const r = isG ? await fb.A.reauthenticateWithPopup(user, p) : await fb.A.linkWithPopup(user, p);
     const c = fb.A.GoogleAuthProvider.credentialFromResult(r);
     if (!c || !c.accessToken) throw new Error('Google did not grant Drive access');
-    Object.assign(DR, { on: true, tok: c.accessToken, exp: Date.now() + 55 * 60000 }); saveDR();
-    await driveSave(true);
+    Object.assign(DR, { tok: c.accessToken, exp: Date.now() + 55 * 60000 }); saveDR();
+    return true;
   } catch (e) {
     if (!['auth/popup-closed-by-user', 'auth/cancelled-popup-request'].includes(e.code))
-      toast(e.code === 'auth/popup-blocked' ? 'Allow pop-ups for this site, then tap again' : e.code === 'auth/user-mismatch' ? 'Pick the same Google account you signed in with' : 'Drive: ' + (e.message || e.code), 5000);
-  }
-  schedule();
+      toast(e.code === 'auth/popup-blocked' ? 'Allow pop-ups for this site, then tap again' : e.code === 'auth/user-mismatch' ? 'Pick the same Google account you signed in with' : 'Google: ' + (e.message || e.code), 5000);
+    return false;
+  } finally { schedule(); }
+}
+async function driveConnect() {
+  if (!fb || !user) return toast('Sign in with Google first, then connect Drive', 4000);
+  if (!(await googleToken())) return;
+  DR.on = true; saveDR();
+  await driveSave(true);
+  if (view === 'port') refreshPrices(false);
 }
 async function dfetch(url, opt = {}) {
   const r = await fetch(url, { ...opt, headers: { Authorization: 'Bearer ' + DR.tok, ...(opt.headers || {}) } });
@@ -1441,7 +1450,234 @@ function renderDrive() {
 }
 $('#driveBtn').onclick = () => driveTokOk() ? driveSave(true) : driveConnect();
 $('#driveNagBtn').onclick = driveConnect;
-$('#driveOff').onclick = () => { if (confirm('Stop auto-saving to Google Drive? Files already in Drive stay there.')) { DR = { folder: DR.folder, json: DR.json, csv: DR.csv }; saveDR(); schedule(); } };
+$('#driveOff').onclick = () => { if (confirm('Stop auto-saving to Google Drive? Files already in Drive stay there.')) { DR = { folder: DR.folder, json: DR.json, csv: DR.csv, sheet: DR.sheet }; saveDR(); schedule(); } };
+
+// ================= Portfolio (live) =================
+// Holdings come from the Zerodha Console holdings export (Equity + Mutual Funds) plus anything added by hand
+// (US stocks via Zerodha US / NSE IX, Aionion, fixed items). Prices:
+//  - Indian & US stocks/ETFs + USD/INR: Google Finance, read through a small "Trickle prices" Google Sheet that
+//    Trickle creates in the user's own Drive (same 1-hour Google token as Drive auto-save). Delayed ~15–20 min.
+//  - Mutual funds: latest NAV from api.mfapi.in (no sign-in needed).
+//  - Fallbacks: last known price, then the "previous close" from the import file.
+const PKEY = 'trickle_prices', SHEETS = 'https://sheets.googleapis.com/v4/spreadsheets';
+const KINDS = { IN: ['Indian stocks & ETFs', '#1e88e5'], MF: ['Mutual funds', '#8e24aa'], US: ['US stocks & ETFs', '#00897b'], FIX: ['Fixed & other', '#fb8c00'] };
+const PLATS = ['Zerodha', 'Zerodha US', 'NSE IX', 'Aionion', 'Bank', 'Other'];
+let PX = (() => { try { return JSON.parse(localStorage.getItem(PKEY)) || {}; } catch (e) { return {}; } })();
+const savePX = () => { try { localStorage.setItem(PKEY, JSON.stringify(PX)); } catch (e) {} };
+let pBusy = false, pTimer = 0, pTry = 0;
+const PF = () => S.portfolio || { holdings: [], goal: 1e7, hist: {} };
+const numv = v => typeof v === 'number' ? v : parseFloat(String(v ?? '').replace(/[,₹$\s]/g, '')) || 0;
+const pkey = h => h.kind + ':' + (h.kind === 'MF' ? (h.isin || h.sym) : h.sym).toUpperCase();
+const gTicker = h => h.kind === 'US' ? h.sym.toUpperCase() : /:/.test(h.sym) ? h.sym.toUpperCase() : 'NSE:' + h.sym.toUpperCase().replace(/-(EQ|BE|BZ|SM|ST|IV|RR)$/, '');
+const fx = () => (PX.FX && PX.FX.p) || 0;
+function hval(h) {   // current value, cost and day change in ₹
+  if (h.kind === 'FIX') return { val: +h.value || 0, cost: +h.value || 0, day: 0, live: true };
+  const q = PX[pkey(h)], rate = h.kind === 'US' ? fx() : 1;
+  const price = q && q.p ? q.p : (+h.prev || +h.avg || 0), live = !!(q && q.p);
+  const val = price * h.qty * (h.kind === 'US' ? (rate || 0) : 1), cost = h.avg * h.qty * (h.kind === 'US' ? (h.avgFx || rate || 0) : 1);
+  const day = q && q.p && q.pc ? (q.p - q.pc) * h.qty * rate : 0;
+  return { val, cost, day, price, live, t: q && q.t };
+}
+function savePF(P) { S.portfolio = { holdings: P.holdings, goal: +P.goal || 1e7, hist: P.hist || {}, imported: P.imported || '' }; saveMeta(); }
+function snapHist() {   // one total per day, so progress can be charted later (and read from the Drive backup)
+  const P = PF(); if (!P.holdings.length) return;
+  const tot = Math.round(P.holdings.reduce((a, h) => a + hval(h).val, 0)), d = today();
+  if (!tot || (P.hist || {})[d] === tot) return;
+  const hist = { ...(P.hist || {}), [d]: tot }; const ks = Object.keys(hist).sort(); while (ks.length > 800) delete hist[ks.shift()];
+  savePF({ ...P, hist });
+}
+
+// ---- prices ----
+async function sheetsFetch(url, opt) {
+  try { return await dfetch(url, opt); }
+  catch (e) { if (e.status === 403 && /SERVICE_DISABLED|has not been used|is disabled/i.test(e.message)) throw new Error('Turn on the Google Sheets API for trickle-d7b08 in Google Cloud console, then refresh'); throw e; }
+}
+async function priceSheet() {
+  if (DR.sheet) return DR.sheet;
+  const f = await sheetsFetch(`${SHEETS}?fields=spreadsheetId`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ properties: { title: 'Trickle prices (used by the app — safe to leave)' } }) });
+  DR.sheet = f.spreadsheetId; saveDR();
+  try { if (DR.folder) await dfetch(`${DAPI}/${DR.sheet}?addParents=${DR.folder}&removeParents=root&fields=id`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: '{}' }); } catch (e) {}
+  return DR.sheet;
+}
+async function googleQuotes(tickers) {
+  const rows = [['FX', '=IFERROR(GOOGLEFINANCE("CURRENCY:USDINR"),"")', ''], ...tickers.map(t => [t, `=IFERROR(GOOGLEFINANCE("${t.replace(/"/g, '')}","price"),"")`, `=IFERROR(GOOGLEFINANCE("${t.replace(/"/g, '')}","closeyest"),"")`])];
+  const go2 = async () => {
+    const id = await priceSheet(), rng = 'A1:C' + Math.max(rows.length, 1);
+    await sheetsFetch(`${SHEETS}/${id}/values/A1:C2000:clear`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+    await sheetsFetch(`${SHEETS}/${id}/values/${rng}?valueInputOption=USER_ENTERED`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ values: rows }) });
+    let vals = [];
+    for (let i = 0; i < 5; i++) {   // Google Finance can take a moment to fill in
+      await new Promise(r => setTimeout(r, i ? 2500 : 1200));
+      vals = (await sheetsFetch(`${SHEETS}/${id}/values/${rng}?valueRenderOption=UNFORMATTED_VALUE`)).values || [];
+      if (vals.slice(1).every(r => r && typeof r[1] === 'number') || i === 4) break;
+      if (vals.slice(1).filter(r => r && typeof r[1] === 'number').length >= tickers.length * 0.9 && i >= 2) break;
+    }
+    return vals;
+  };
+  try { return await go2(); }
+  catch (e) { if (e.status === 404) { DR.sheet = null; saveDR(); return go2(); } throw e; }
+}
+async function mfCode(h) {
+  if (h.mf) return h.mf;
+  const words = h.sym.replace(/[-–()]/g, ' ').split(/\s+/).filter(w => w.length > 1 && !/^(plan|option|fund|direct|regular|growth|the|of)$/i.test(w)).slice(0, 4).join(' ');
+  const list = await (await fetch('https://api.mfapi.in/mf/search?q=' + encodeURIComponent(words || h.sym))).json();
+  if (!Array.isArray(list) || !list.length) return null;
+  const want = h.sym.toLowerCase(), dir = /direct/.test(want), gro = /growth/.test(want) || !/idcw|dividend/.test(want);
+  const score = x => { const n = x.schemeName.toLowerCase(); return (dir === /direct/.test(n) ? 2 : 0) + (gro === /growth/.test(n) ? 1 : 0); };
+  const cands = [...list].sort((a, b) => score(b) - score(a)).slice(0, 8);
+  if (h.isin) for (const c of cands) { try { const m = (await (await fetch(`https://api.mfapi.in/mf/${c.schemeCode}/latest`)).json()).meta || {}; if ([m.isin_growth, m.isin_div_reinvestment].includes(h.isin)) return String(c.schemeCode); } catch (e) {} }
+  return String(cands[0].schemeCode);
+}
+async function refreshPrices(manual) {
+  const P = PF(); if (pBusy || !P.holdings.length) { if (manual && !P.holdings.length) toast('Add or import holdings first'); return; }
+  if (manual && !driveTokOk() && P.holdings.some(h => h.kind === 'IN' || h.kind === 'US')) { if (!(await googleToken())) return; }
+  pBusy = true; pTry = Date.now(); schedule();
+  const errs = []; let mfFixed = false, n = 0;
+  try {
+    // mutual funds (no sign-in)
+    await Promise.all(P.holdings.filter(h => h.kind === 'MF').map(async h => {
+      try { const code = await mfCode(h); if (!code) return errs.push(h.sym); if (code !== h.mf) { h.mf = code; mfFixed = true; }
+        const j = await (await fetch(`https://api.mfapi.in/mf/${code}`)).json(); const d = j.data || [];
+        if (d[0]) { PX[pkey(h)] = { p: +d[0].nav, pc: d[1] ? +d[1].nav : 0, t: Date.now(), d: d[0].date, n: (j.meta || {}).scheme_name }; n++; }
+      } catch (e) { errs.push(h.sym); }
+    }));
+    // stocks, ETFs, USD/INR via Google Finance
+    const live = P.holdings.filter(h => h.kind === 'IN' || h.kind === 'US');
+    if (live.length || P.holdings.some(h => h.kind === 'US')) {
+      if (driveTokOk()) {
+        const tick = [...new Set(live.map(gTicker))];
+        const vals = await googleQuotes(tick);
+        if (vals[0] && typeof vals[0][1] === 'number') PX.FX = { p: vals[0][1], t: Date.now() };
+        const by = {}; vals.slice(1).forEach(r => { if (r && typeof r[1] === 'number') by[r[0]] = r; });
+        live.forEach(h => { const r = by[gTicker(h)]; if (r) { PX[pkey(h)] = { p: r[1], pc: typeof r[2] === 'number' ? r[2] : 0, t: Date.now() }; n++; } else errs.push(h.sym); });
+      } else if (!manual) { /* no token: keep last prices quietly */ }
+      if (!fx() || Date.now() - (PX.FX.t || 0) > 864e5) { try { const j = await (await fetch('https://open.er-api.com/v6/latest/USD')).json(); if (j.rates && j.rates.INR) PX.FX = { p: j.rates.INR, t: Date.now() }; } catch (e) {} }
+    }
+    PX._t = Date.now(); savePX();
+    if (mfFixed) savePF(P);
+    snapHist();
+    if (manual) toast(errs.length ? `Updated ${n} prices · no live price for ${errs.slice(0, 3).join(', ')}${errs.length > 3 ? '…' : ''}` : `Updated ${n} live prices ✓`, errs.length ? 5000 : 2600);
+  } catch (e) { toast(e.expired ? 'Google connection expired — tap Refresh' : 'Prices: ' + e.message, 6000); }
+  finally { pBusy = false; schedule(); }
+}
+function portAuto() {   // while the Portfolio tab is open: refresh every 5 min (quietly; never opens a pop-up)
+  clearTimeout(pTimer);
+  if (view !== 'port' || !PF().holdings.length) return;
+  const age = Date.now() - Math.max(PX._t || 0, pTry);
+  pTimer = setTimeout(() => { if (view === 'port' && !document.hidden) refreshPrices(false); }, age > 5 * 60000 ? 300 : 5 * 60000 - age);
+}
+document.addEventListener('visibilitychange', () => { if (!document.hidden) portAuto(); });
+
+// ---- Zerodha Console holdings import (Equity / Mutual Funds sheets, .xlsx or .csv) ----
+function parseHoldings(sheets) {
+  const out = [];
+  for (const [name, rows] of sheets) {
+    const hi = rows.findIndex(r => r.some(c => /^symbol$/i.test(String(c).trim())) && r.some(c => /quantity/i.test(c)));
+    if (hi < 0) continue;
+    const H = rows[hi].map(c => String(c).trim().toLowerCase()), col = re => H.findIndex(h => re.test(h));
+    const cS = col(/^symbol$/), cI = col(/^isin$/), cAvg = col(/average/), cPrev = col(/previous clos|closing price|^ltp$|last price/), cPL = col(/^unrealized p&l$|^unrealised p&l$|^p&l$/);
+    const qCols = H.map((h, i) => /^quantity/.test(h) && !/long term/.test(h) ? i : -1).filter(i => i >= 0), cLT = col(/quantity long term/);
+    const sheetMF = /mutual/i.test(name);
+    for (const r of rows.slice(hi + 1)) {
+      const sym = String(r[cS] ?? '').trim(); if (!sym || /^total/i.test(sym)) continue;
+      const avg = numv(r[cAvg]), prev = cPrev >= 0 ? numv(r[cPrev]) : 0;
+      let qty = qCols.reduce((a, i) => a + numv(r[i]), 0);
+      if (cLT >= 0 && numv(r[cLT]) && cPL >= 0 && prev && prev !== avg) {   // is "long term" a separate bucket or part of available? Check against the P&L column.
+        const pl = numv(r[cPL]), withLT = qty + numv(r[cLT]);
+        if (Math.abs((prev - avg) * withLT - pl) < Math.abs((prev - avg) * qty - pl)) qty = withLT;
+      }
+      if (!qty) continue;
+      const isin = cI >= 0 ? String(r[cI] || '').trim() : '';
+      const mf = sheetMF || (/\s/.test(sym) && /fund|plan|growth|idcw/i.test(sym));
+      out.push({ id: uid(), kind: mf ? 'MF' : 'IN', sym, name: '', isin, qty: r2(qty * 1000) / 1000, avg: r2(avg * 10000) / 10000, prev, plat: 'Zerodha', src: 'zerodha' });
+    }
+  }
+  return out;
+}
+async function importHoldings(files) {
+  try {
+    const X = await loadXLSX(); const sheets = [];
+    for (const f of files) { const wb = X.read(await f.arrayBuffer(), { type: 'array' }); wb.SheetNames.forEach(n => sheets.push([n, X.utils.sheet_to_json(wb.Sheets[n], { header: 1, raw: true, defval: '' })])); }
+    const list = parseHoldings(sheets);
+    if (!list.length) return toast('No holdings found — use Zerodha Console → Portfolio → Holdings → Download (Excel or CSV)', 6000);
+    const P = PF(), keep = P.holdings.filter(h => h.src !== 'zerodha'), cost = list.reduce((a, h) => a + h.qty * h.avg, 0);
+    const c = k => list.filter(h => h.kind === k).length;
+    openSheet(`<h3>Import Zerodha holdings</h3><p class="muted" style="margin-top:2px">${c('IN')} stocks/ETFs · ${c('MF')} mutual funds · cost ${money(cost)}</p>
+      <div style="max-height:40vh;overflow:auto">${list.map(h => `<div class="settle"><span>${esc(h.sym)} <span class="muted">· ${h.qty} @ ${money(h.avg)}</span></span><b>${money(h.qty * h.avg)}</b></div>`).join('')}</div>
+      <p class="muted">This replaces your earlier Zerodha import. ${keep.length ? `Your ${keep.length} hand-added holding${keep.length > 1 ? 's' : ''} stay.` : ''}</p>
+      <div class="btns"><button data-h="no">Cancel</button><button data-h="ok" style="background:var(--accent);color:#fff;border:0">Import</button></div>`, ev => {
+      const b = ev.target.closest('[data-h]'); if (!b) return; closeSheet(); if (b.dataset.h !== 'ok') return;
+      savePF({ ...P, holdings: [...list, ...keep], imported: today() }); toast(`Imported ${list.length} holdings`); refreshPrices(false);
+    });
+  } catch (e) { console.error(e); toast('Could not read that file: ' + e.message, 5000); }
+}
+
+// ---- add / edit by hand ----
+function holdingForm(h) {
+  const isNew = !h; h = h || { kind: 'US', plat: 'Zerodha US', sym: '', qty: '', avg: '', value: '' };
+  const kindSel = Object.entries(KINDS).map(([k, [n]]) => `<option value="${k}" ${h.kind === k ? 'selected' : ''}>${n}</option>`).join('');
+  openSheet(`<h3>${isNew ? 'Add a holding' : 'Edit holding'}</h3>
+    <label class="muted">Type<select id="hKind">${kindSel}</select></label>
+    <label class="muted">Platform<input id="hPlat" list="hPlats" value="${esc(h.plat || '')}"><datalist id="hPlats">${PLATS.map(p => `<option value="${p}">`).join('')}</datalist></label>
+    <label class="muted"><span id="hSymL">Symbol</span><input id="hSym" value="${esc(h.sym)}" autocapitalize="characters"></label>
+    <div id="hQtyRow" class="row"><label class="muted">Quantity / units<input id="hQty" inputmode="decimal" value="${h.qty ?? ''}"></label><label class="muted"><span id="hAvgL">Avg price</span><input id="hAvg" inputmode="decimal" value="${h.avg ?? ''}"></label></div>
+    <label class="muted" id="hValRow">Current value (₹)<input id="hVal" inputmode="decimal" value="${h.value ?? ''}"></label>
+    <p class="muted" id="hHint"></p>
+    <div class="btns">${isNew ? '<button data-h="no">Cancel</button>' : '<button data-h="del" class="danger">Delete</button>'}<button data-h="save" style="background:var(--accent);color:#fff;border:0">Save</button></div>`, ev => {
+    const b = ev.target.closest('[data-h]'); if (!b) return;
+    const P = PF();
+    if (b.dataset.h === 'no') return closeSheet();
+    if (b.dataset.h === 'del') { if (!confirm('Delete this holding?')) return; savePF({ ...P, holdings: P.holdings.filter(x => x.id !== h.id) }); return closeSheet(); }
+    const kind = $('#hKind').value, sym = $('#hSym').value.trim(), qty = numv($('#hQty').value), avg = numv($('#hAvg').value), value = numv($('#hVal').value);
+    if (!sym) return toast(kind === 'FIX' || kind === 'MF' ? 'Enter a name' : 'Enter the symbol');
+    if (kind === 'FIX' ? !value : !qty) return toast(kind === 'FIX' ? 'Enter the current value' : 'Enter the quantity');
+    const n = { id: h.id || uid(), kind, sym: kind === 'IN' || kind === 'US' ? sym.toUpperCase() : sym, name: '', isin: kind === h.kind && sym === h.sym ? (h.isin || '') : '', plat: $('#hPlat').value.trim() || 'Other', src: 'manual', ...(kind === 'FIX' ? { qty: 1, avg: value, value } : { qty, avg }), ...(kind === 'US' && fx() ? { avgFx: h.avgFx || fx() } : {}) };
+    if (h.mf && kind === 'MF' && sym === h.sym) n.mf = h.mf;
+    savePF({ ...P, holdings: isNew ? [...P.holdings, n] : P.holdings.map(x => x.id === h.id ? n : x) });
+    closeSheet(); refreshPrices(false);
+  });
+  const DEFP = { IN: 'Zerodha', MF: 'Zerodha', US: 'Zerodha US', FIX: 'Bank' };
+  const sync = () => { const k = $('#hKind').value;
+    if (isNew && (!$('#hPlat').value || Object.values(DEFP).includes($('#hPlat').value))) $('#hPlat').value = DEFP[k];
+    $('#hValRow').hidden = k !== 'FIX'; $('#hQtyRow').hidden = k === 'FIX';
+    $('#hSymL').textContent = k === 'FIX' ? 'Name (e.g. PF, FD, cash)' : k === 'MF' ? 'Fund name (as on your statement)' : 'Symbol';
+    $('#hAvgL').textContent = k === 'US' ? 'Avg price ($)' : k === 'MF' ? 'Avg NAV (₹)' : 'Avg price (₹)';
+    $('#hHint').textContent = k === 'US' ? 'US ticker, e.g. VOO or QQQM. Shown in ₹ at the live USD/INR rate.' : k === 'IN' ? 'NSE symbol, e.g. NIFTYBEES or INFY. For BSE-only shares type BOM:500325.' : k === 'MF' ? 'The NAV is matched by name; check the fund name shown after saving.' : 'Use for things without a market price. Update the value when it changes.'; };
+  $('#hKind').onchange = sync; sync();
+}
+
+// ---- render ----
+function renderPort() {
+  const P = PF(), H = P.holdings, goal = +P.goal || 1e7;
+  const V = H.map(h => ({ h, ...hval(h) })), tot = V.reduce((a, x) => a + x.val, 0), cost = V.reduce((a, x) => a + x.cost, 0), day = V.reduce((a, x) => a + x.day, 0);
+  const pl = tot - cost, pct = Math.min(100, tot / goal * 100), stale = V.filter(x => x.h.kind !== 'FIX' && !x.live).length;
+  const upd = PX._t ? new Date(PX._t) : null, updTxt = upd ? (today() === upd.toISOString().slice(0, 10) ? 'today ' : niceDate(upd.toISOString().slice(0, 10)) + ' ') + upd.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'never';
+  const hist = P.hist || {}, hk = Object.keys(hist).sort(), mAgo = hk.filter(d => d <= new Date(Date.now() - 30 * 864e5).toISOString().slice(0, 10)).pop();
+  $('#portTop').innerHTML = !H.length ? `<div class="label" style="margin-top:0">Your portfolio</div><p class="muted">Import your Zerodha holdings (Console → Portfolio → Holdings → Download, Excel or CSV — do the Mutual Funds tab too if it's a separate file), then add US and other holdings by hand.</p>`
+    : `<div class="muted">Portfolio value</div><div class="big">${money(Math.round(tot))}</div>
+    <div class="muted">${day ? `<span class="${day >= 0 ? 'down' : 'up'}">${day >= 0 ? '▲' : '▼'} ${money(Math.abs(Math.round(day)))} today</span> · ` : ''}${cost ? `<span class="${pl >= 0 ? 'down' : 'up'}">${pl >= 0 ? '+' : '−'}${money(Math.abs(Math.round(pl)))} (${(pl / cost * 100).toFixed(1)}%)</span> on ${money(Math.round(cost))} invested` : ''}</div>
+    <div class="label">Goal ${money(goal)} <button class="link small" id="portGoal" style="padding:0 4px">✎</button></div>
+    <div class="bar" style="height:12px"><i style="width:${pct}%;background:#00897b"></i></div>
+    <div class="row muted" style="margin-top:6px"><span>${pct.toFixed(1)}% there</span><span style="text-align:right">${tot >= goal ? 'Goal reached 🎉' : money(Math.round(goal - tot)) + ' to go'}</span></div>
+    ${mAgo && hist[mAgo] ? `<div class="muted" style="margin-top:4px">${tot - hist[mAgo] >= 0 ? '▲' : '▼'} ${money(Math.abs(Math.round(tot - hist[mAgo])))} since ${niceDate(mAgo)}</div>` : ''}
+    <div class="muted" style="margin-top:8px">${pBusy ? 'Updating prices…' : `Prices updated ${updTxt}`} · stocks delayed ~15–20 min${stale ? ` · ${stale} without a live price yet` : ''}${!driveTokOk() && H.some(h => h.kind !== 'MF' && h.kind !== 'FIX') ? ' · tap Refresh to sign in to Google for live stock prices' : ''}</div>`;
+  const byK = {}; V.forEach(x => { byK[x.h.kind] = (byK[x.h.kind] || 0) + x.val; });
+  $('#portMix').innerHTML = H.length && tot ? `<div class="label" style="margin-top:0">Mix</div>${Object.keys(KINDS).filter(k => byK[k]).map(k => `<div style="margin:6px 0"><div class="row"><span>${KINDS[k][0]}</span><b style="text-align:right">${money(Math.round(byK[k]))} <span class="muted">${Math.round(byK[k] / tot * 100)}%</span></b></div><div class="bar"><i style="width:${byK[k] / tot * 100}%;background:${KINDS[k][1]}"></i></div></div>`).join('')}` : '';
+  $('#portMix').hidden = !$('#portMix').innerHTML;
+  const groups = Object.keys(KINDS).filter(k => V.some(x => x.h.kind === k));
+  $('#portList').innerHTML = groups.map(k => `<div class="day"><span>${KINDS[k][0]}</span><span>${money(Math.round(byK[k] || 0))}</span></div><div class="card" style="padding:2px 14px">${V.filter(x => x.h.kind === k).sort((a, b) => b.val - a.val).map(x => {
+    const h = x.h, g = x.cost ? (x.val - x.cost) / x.cost * 100 : 0, q = PX[pkey(h)] || {};
+    const sub = h.kind === 'FIX' ? esc(h.plat) : `${+h.qty.toFixed(3)} × ${h.kind === 'US' ? '$' + (x.price || 0).toFixed(2) : money(x.price || 0)} · ${esc(h.plat)}${x.live ? '' : ' · <span class="up">no live price</span>'}${h.kind === 'MF' && q.n ? ' · ' + esc(q.n) : ''}`;
+    return `<div class="item" data-hid="${h.id}"><div class="ic" style="background:${KINDS[k][1]}22">${k === 'US' ? '🇺🇸' : k === 'MF' ? '🧺' : k === 'FIX' ? '🏦' : '📈'}</div><div class="mid"><div class="t">${esc(h.sym)}</div><div class="s">${sub}</div></div><div class="a" style="text-align:right">${money(Math.round(x.val))}${h.kind !== 'FIX' && x.cost ? `<div class="s ${g >= 0 ? 'down' : 'up'}" style="font-weight:400">${g >= 0 ? '+' : ''}${g.toFixed(1)}%</div>` : ''}</div></div>`; }).join('')}</div>`).join('');
+  $('#portRefresh').disabled = pBusy;
+  portAuto();
+}
+$('#portRefresh').onclick = () => refreshPrices(true);
+$('#portAdd').onclick = () => holdingForm(null);
+$('#portImport').onclick = () => $('#holdFile').click();
+$('#holdFile').onchange = e => { const f = [...e.target.files]; e.target.value = ''; if (f.length) importHoldings(f); };
+$('#portList').onclick = e => { const r = e.target.closest('[data-hid]'); if (r) holdingForm(PF().holdings.find(h => h.id === r.dataset.hid)); };
+$('#portTop').onclick = e => { if (!e.target.closest('#portGoal')) return; const v = numv(prompt('Goal amount in ₹', String(PF().goal || 1e7))); if (v > 0) savePF({ ...PF(), goal: v }); };
 
 // ================= import =================
 let fileTarget = '';

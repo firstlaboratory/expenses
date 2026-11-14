@@ -220,6 +220,14 @@ body.selecting main{padding-bottom:180px}
   <div class="card"><div class="label" style="margin-top:0">By person</div><div id="byPerson"></div><div class="label">By payment mode</div><div id="byMode"></div></div>
 </section>
 
+<section id="v-port">
+  <div class="card" id="portTop"></div>
+  <div class="btns" style="margin:0 0 12px"><button id="portRefresh">⟳ Refresh</button><button id="portImport">⬆ Import Zerodha</button><button id="portAdd">＋ Add</button></div>
+  <div class="card" id="portMix"></div>
+  <div id="portList"></div>
+  <p class="muted">Tap a holding to edit it. Live prices: Google Finance (via a “Trickle prices” sheet in your Drive) and mfapi.in for mutual-fund NAVs. Not investment advice.</p>
+</section>
+
 <section id="v-settings">
   <div class="card" id="account"></div>
   <div class="card">
@@ -269,13 +277,15 @@ body.selecting main{padding-bottom:180px}
   <button data-v="list"><b>☰</b>Expenses</button>
   <button data-v="trips"><b>✈</b>Trips</button>
   <button data-v="stats"><b>▥</b>Stats</button>
+  <button data-v="port"><b>₹</b>Portfolio</button>
   <button data-v="settings"><b>⚙</b>Settings</button>
 </nav>
 <div id="selBar" class="selbar hidden"><div id="selCount"></div><div class="selbtns"><button data-bulk="all">All</button><button data-bulk="note">✎ Note</button><button data-bulk="cat">🏷 Cat</button><button data-bulk="friend">🤝 Friend</button><button data-bulk="trip">✈ Trip</button><button data-bulk="del" class="danger">🗑</button></div></div>
+<input type="file" id="holdFile" hidden multiple accept=".csv,.xls,.xlsx,text/csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet">
 <input type="file" id="slipFile" hidden multiple accept=".pdf,application/pdf">
 <input type="file" id="impFile" hidden accept=".pdf,application/pdf,.csv,.txt,.xls,.xlsx,.json,text/csv,text/plain,application/json,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet">
 <div class="sheet-bg" id="sheetBg"><div class="sheet" id="sheet"></div></div>
 <div class="toast" id="toast"></div>
-<script type="module" src="app.js?v=28"></script>
+<script type="module" src="app.js?v=30"></script>
 </body>
 </html>
