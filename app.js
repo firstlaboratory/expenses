@@ -1670,10 +1670,14 @@ function renderPort() {
     const sub = h.kind === 'FIX' ? esc(h.plat) : `${+h.qty.toFixed(3)} × ${h.kind === 'US' ? '$' + (x.price || 0).toFixed(2) : money(x.price || 0)} · ${esc(h.plat)}${x.live ? '' : ' · <span class="up">no live price</span>'}${h.kind === 'MF' && q.n ? ' · ' + esc(q.n) : ''}`;
     return `<div class="item" data-hid="${h.id}"><div class="ic" style="background:${KINDS[k][1]}22">${k === 'US' ? '🇺🇸' : k === 'MF' ? '🧺' : k === 'FIX' ? '🏦' : '📈'}</div><div class="mid"><div class="t">${esc(h.sym)}</div><div class="s">${sub}</div></div><div class="a" style="text-align:right">${money(Math.round(x.val))}${h.kind !== 'FIX' && x.cost ? `<div class="s ${g >= 0 ? 'down' : 'up'}" style="font-weight:400">${g >= 0 ? '+' : ''}${g.toFixed(1)}%</div>` : ''}</div></div>`; }).join('')}</div>`).join('');
   $('#portRefresh').disabled = pBusy;
+  $('#portClear').hidden = !H.length;
   portAuto();
 }
 $('#portRefresh').onclick = () => refreshPrices(true);
 $('#portAdd').onclick = () => holdingForm(null);
+$('#portClear').onclick = () => { const P = PF(), n = P.holdings.length; if (!n) return toast('No holdings to clear');
+  if (!confirm(`Delete all ${n} holdings? Your goal and value history stay. You can import again after.`)) return;
+  savePF({ ...P, holdings: [] }); toast('Holdings cleared'); };
 $('#portImport').onclick = () => $('#holdFile').click();
 $('#holdFile').onchange = e => { const f = [...e.target.files]; e.target.value = ''; if (f.length) importHoldings(f); };
 $('#portList').onclick = e => { const r = e.target.closest('[data-hid]'); if (r) holdingForm(PF().holdings.find(h => h.id === r.dataset.hid)); };
