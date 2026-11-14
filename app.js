@@ -1465,6 +1465,7 @@ const PLATS = ['Zerodha', 'Zerodha US', 'NSE IX', 'Aionion', 'Bank', 'Other'];
 let PX = (() => { try { return JSON.parse(localStorage.getItem(PKEY)) || {}; } catch (e) { return {}; } })();
 const savePX = () => { try { localStorage.setItem(PKEY, JSON.stringify(PX)); } catch (e) {} };
 let pBusy = false, pTimer = 0, pTry = 0;
+let pAcct = '', pGroup = (() => { try { return localStorage.getItem('trickle_pgroup') || 'acct'; } catch (e) { return 'acct'; } })();
 const PF = () => S.portfolio || { holdings: [], goal: 1e7, hist: {} };
 const numv = v => typeof v === 'number' ? v : parseFloat(String(v ?? '').replace(/[,₹$\s]/g, '')) || 0;
 const pkey = h => h.kind + ':' + (h.kind === 'MF' ? (h.isin || h.sym) : h.sym).toUpperCase();
@@ -1638,7 +1639,7 @@ async function importHoldings(files) {
     const KN = { IN: '🇮🇳 India', MF: '🧺 Fund', US: '🇺🇸 US' };
     const rowsHTML = () => list.map((h, i) => `<label class="pvrow" style="display:flex;gap:8px;align-items:center;padding:6px 0;border-bottom:1px solid var(--line)"><input type="checkbox" data-hi="${i}" ${h.off ? '' : 'checked'} style="width:auto;margin:0"><span style="flex:1;min-width:0"><b>${esc(h.sym)}</b>${h.name ? ` <span class="muted">${esc(h.name)}</span>` : ''}<br><span class="muted">${h.qty} @ ${h.kind === 'US' ? '$' + h.avg : money(h.avg)}</span></span><select data-hk="${i}" style="width:auto;margin:0;padding:4px;font-size:12px">${Object.entries(KN).map(([k, n]) => `<option value="${k}" ${h.kind === k ? 'selected' : ''}>${n}</option>`).join('')}</select></label>`).join('');
     openSheet(`<h3>Import holdings</h3><p class="muted" style="margin-top:2px">Found ${list.length} in ${esc(files.map(f => f.name).join(', '))}. Untick anything that isn't a holding; fix the type if needed.</p>
-      <label class="muted">Platform<input id="impPlat" list="hPlats2" value="${esc(guess)}"><datalist id="hPlats2">${[...new Set([...PLATS, ...PLAT_RE.map(x => x[0])])].map(p => `<option value="${p}">`).join('')}</datalist></label>
+      <label class="muted">Account (use a different name for each demat, e.g. “Zerodha – Guru”)<input id="impPlat" list="hPlats2" value="${esc(guess)}"><datalist id="hPlats2">${[...new Set([...PLATS, ...PLAT_RE.map(x => x[0])])].map(p => `<option value="${p}">`).join('')}</datalist></label>
       <div style="max-height:42vh;overflow:auto;margin-top:8px" id="impRows">${rowsHTML()}</div>
       <p class="muted" id="impNote"></p>
       <div class="btns"><button data-h="no">Cancel</button><button data-h="ok" style="background:var(--accent);color:#fff;border:0">Import</button></div>`, ev => {
@@ -1664,7 +1665,7 @@ function holdingForm(h) {
   const kindSel = Object.entries(KINDS).map(([k, [n]]) => `<option value="${k}" ${h.kind === k ? 'selected' : ''}>${n}</option>`).join('');
   openSheet(`<h3>${isNew ? 'Add a holding' : 'Edit holding'}</h3>
     <label class="muted">Type<select id="hKind">${kindSel}</select></label>
-    <label class="muted">Platform<input id="hPlat" list="hPlats" value="${esc(h.plat || '')}"><datalist id="hPlats">${PLATS.map(p => `<option value="${p}">`).join('')}</datalist></label>
+    <label class="muted">Account / platform<input id="hPlat" list="hPlats" value="${esc(h.plat || '')}"><datalist id="hPlats">${PLATS.map(p => `<option value="${p}">`).join('')}</datalist></label>
     <label class="muted"><span id="hSymL">Symbol</span><input id="hSym" value="${esc(h.sym)}" autocapitalize="characters"></label>
     <div id="hQtyRow" class="row"><label class="muted">Quantity / units<input id="hQty" inputmode="decimal" value="${h.qty ?? ''}"></label><label class="muted"><span id="hAvgL">Avg price</span><input id="hAvg" inputmode="decimal" value="${h.avg ?? ''}"></label></div>
     <label class="muted" id="hValRow">Current value (₹)<input id="hVal" inputmode="decimal" value="${h.value ?? ''}"></label>
@@ -1710,11 +1711,25 @@ function renderPort() {
   const byK = {}; V.forEach(x => { byK[x.h.kind] = (byK[x.h.kind] || 0) + x.val; });
   $('#portMix').innerHTML = H.length && tot ? `<div class="label" style="margin-top:0">Mix</div>${Object.keys(KINDS).filter(k => byK[k]).map(k => `<div style="margin:6px 0"><div class="row"><span>${KINDS[k][0]}</span><b style="text-align:right">${money(Math.round(byK[k]))} <span class="muted">${Math.round(byK[k] / tot * 100)}%</span></b></div><div class="bar"><i style="width:${byK[k] / tot * 100}%;background:${KINDS[k][1]}"></i></div></div>`).join('')}` : '';
   $('#portMix').hidden = !$('#portMix').innerHTML;
-  const groups = Object.keys(KINDS).filter(k => V.some(x => x.h.kind === k));
-  $('#portList').innerHTML = groups.map(k => `<div class="day"><span>${KINDS[k][0]}</span><span>${money(Math.round(byK[k] || 0))}</span></div><div class="card" style="padding:2px 14px">${V.filter(x => x.h.kind === k).sort((a, b) => b.val - a.val).map(x => {
-    const h = x.h, g = x.cost ? (x.val - x.cost) / x.cost * 100 : 0, q = PX[pkey(h)] || {};
-    const sub = h.kind === 'FIX' ? esc(h.plat) : `${+h.qty.toFixed(3)} × ${h.kind === 'US' ? '$' + (x.price || 0).toFixed(2) : money(x.price || 0)} · ${esc(h.plat)}${x.live ? '' : ' · <span class="up">no live price' + (h.kind === 'IN' && /\s/.test(h.sym) ? ' — tap to set the NSE symbol' : '') + '</span>'}${h.kind === 'MF' && q.n ? ' · ' + esc(q.n) : ''}`;
-    return `<div class="item" data-hid="${h.id}"><div class="ic" style="background:${KINDS[k][1]}22">${k === 'US' ? '🇺🇸' : k === 'MF' ? '🧺' : k === 'FIX' ? '🏦' : '📈'}</div><div class="mid"><div class="t">${esc(h.sym)}</div><div class="s">${sub}</div></div><div class="a" style="text-align:right">${money(Math.round(x.val))}${h.kind !== 'FIX' && x.cost ? `<div class="s ${g >= 0 ? 'down' : 'up'}" style="font-weight:400">${g >= 0 ? '+' : ''}${g.toFixed(1)}%</div>` : ''}</div></div>`; }).join('')}</div>`).join('');
+  // ---- accounts (each demat / broker account = a "platform" name; e.g. "Zerodha – Guru", "Zerodha – Amma") ----
+  const acctOf = h => (h.plat || 'Other').trim() || 'Other', byA = {};
+  V.forEach(x => { const a = acctOf(x.h), o = byA[a] || (byA[a] = { val: 0, cost: 0, day: 0, n: 0, fix: 0 }); o.val += x.val; o.cost += x.cost; o.day += x.day; o.n++; if (x.h.kind === 'FIX') o.fix += x.val; });
+  const accts = Object.keys(byA).sort((a, b) => byA[b].val - byA[a].val);
+  if (pAcct && !byA[pAcct]) pAcct = '';
+  $('#portAccts').innerHTML = accts.length ? `<div class="row" style="align-items:center"><div class="label" style="margin:0">Accounts · ${accts.length}</div><span class="muted" style="text-align:right">tap to filter</span></div>${accts.map(a => { const o = byA[a], g = o.cost - o.fix ? (o.val - o.cost) / (o.cost - o.fix) * 100 : 0;
+      return `<div class="item${pAcct === a ? ' picked' : ''}" data-acct="${esc(a)}" style="${pAcct && pAcct !== a ? 'opacity:.5' : ''}"><div class="mid"><div class="t">${esc(a)} <button class="link small" data-ren="${esc(a)}" style="padding:0 4px">✎</button></div><div class="s">${o.n} holding${o.n > 1 ? 's' : ''} · ${tot ? Math.round(o.val / tot * 100) : 0}% of total${o.day ? ` · <span class="${o.day >= 0 ? 'down' : 'up'}">${o.day >= 0 ? '▲' : '▼'} ${money(Math.abs(Math.round(o.day)))} today</span>` : ''}</div></div><div class="a" style="text-align:right">${money(Math.round(o.val))}${o.cost - o.fix ? `<div class="s ${g >= 0 ? 'down' : 'up'}" style="font-weight:400">${g >= 0 ? '+' : ''}${g.toFixed(1)}%</div>` : ''}</div></div>`; }).join('')}` : '';
+  $('#portAccts').hidden = !accts.length;
+  $$('#portGroup button').forEach(b => b.classList.toggle('on', b.dataset.g === pGroup));
+  $('#portGroup').hidden = !H.length;
+  // ---- holdings list, grouped by account or by type, optionally filtered to one account ----
+  const VV = pAcct ? V.filter(x => acctOf(x.h) === pAcct) : V;
+  const keyOfX = x => pGroup === 'type' ? x.h.kind : acctOf(x.h);
+  const gs = pGroup === 'type' ? Object.keys(KINDS).filter(k => VV.some(x => x.h.kind === k)) : accts.filter(a => VV.some(x => acctOf(x.h) === a));
+  const gTot = g => VV.filter(x => keyOfX(x) === g).reduce((t, x) => t + x.val, 0);
+  $('#portList').innerHTML = (pAcct ? `<div class="row muted" style="margin:4px 2px 0;align-items:center"><span>Showing only <b>${esc(pAcct)}</b></span><button class="link small" id="portAll" style="flex:0 0 auto">Show all</button></div>` : '') + gs.map(g => `<div class="day"><span>${pGroup === 'type' ? KINDS[g][0] : esc(g)}</span><span>${money(Math.round(gTot(g)))}</span></div><div class="card" style="padding:2px 14px">${VV.filter(x => keyOfX(x) === g).sort((a, b) => b.val - a.val).map(x => {
+    const h = x.h, k = h.kind, gp = x.cost ? (x.val - x.cost) / x.cost * 100 : 0, q = PX[pkey(h)] || {};
+    const sub = k === 'FIX' ? (pGroup === 'type' ? esc(acctOf(h)) : 'Fixed value') : `${+h.qty.toFixed(3)} × ${k === 'US' ? '$' + (x.price || 0).toFixed(2) : money(x.price || 0)}${pGroup === 'type' ? ' · ' + esc(acctOf(h)) : ''}${x.live ? '' : ' · <span class="up">no live price' + (k === 'IN' && /\s/.test(h.sym) ? ' — tap to set the NSE symbol' : '') + '</span>'}${k === 'MF' && q.n ? ' · ' + esc(q.n) : ''}`;
+    return `<div class="item" data-hid="${h.id}"><div class="ic" style="background:${KINDS[k][1]}22">${k === 'US' ? '🇺🇸' : k === 'MF' ? '🧺' : k === 'FIX' ? '🏦' : '📈'}</div><div class="mid"><div class="t">${esc(h.sym)}</div><div class="s">${sub}</div></div><div class="a" style="text-align:right">${money(Math.round(x.val))}${k !== 'FIX' && x.cost ? `<div class="s ${gp >= 0 ? 'down' : 'up'}" style="font-weight:400">${gp >= 0 ? '+' : ''}${gp.toFixed(1)}%</div>` : ''}</div></div>`; }).join('')}</div>`).join('');
   $('#portRefresh').disabled = pBusy;
   $('#portClear').hidden = !H.length;
   portAuto();
@@ -1726,7 +1741,15 @@ $('#portClear').onclick = () => { const P = PF(), n = P.holdings.length; if (!n)
   savePF({ ...P, holdings: [] }); toast('Holdings cleared'); };
 $('#portImport').onclick = () => $('#holdFile').click();
 $('#holdFile').onchange = e => { const f = [...e.target.files]; e.target.value = ''; if (f.length) importHoldings(f); };
-$('#portList').onclick = e => { const r = e.target.closest('[data-hid]'); if (r) holdingForm(PF().holdings.find(h => h.id === r.dataset.hid)); };
+$('#portList').onclick = e => { if (e.target.closest('#portAll')) { pAcct = ''; return schedule(); } const r = e.target.closest('[data-hid]'); if (r) holdingForm(PF().holdings.find(h => h.id === r.dataset.hid)); };
+$('#portGroup').onclick = e => { const b = e.target.closest('[data-g]'); if (!b) return; pGroup = b.dataset.g; try { localStorage.setItem('trickle_pgroup', pGroup); } catch (x) {} schedule(); };
+$('#portAccts').onclick = e => {
+  const ren = e.target.closest('[data-ren]');
+  if (ren) { const old = ren.dataset.ren, nn = (prompt('Account name (e.g. "Zerodha – Guru")', old) || '').trim(); if (!nn || nn === old) return;
+    const P = PF(); savePF({ ...P, holdings: P.holdings.map(h => (h.plat || 'Other').trim() === old ? { ...h, plat: nn } : h) }); if (pAcct === old) pAcct = nn; return toast('Renamed to ' + nn); }
+  const r = e.target.closest('[data-acct]'); if (!r) return; pAcct = pAcct === r.dataset.acct ? '' : r.dataset.acct; schedule();
+  if (pAcct) setTimeout(() => $('#portList').scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
+};
 $('#portTop').onclick = e => { if (!e.target.closest('#portGoal')) return; const v = numv(prompt('Goal amount in ₹', String(PF().goal || 1e7))); if (v > 0) savePF({ ...PF(), goal: v }); };
 
 // ================= import =================
